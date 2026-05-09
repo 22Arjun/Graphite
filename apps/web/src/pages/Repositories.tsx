@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { Hexagon, Search, Filter, RefreshCw, CheckCircle2, Clock, AlertCircle, Loader2 } from 'lucide-react';
-import { MOCK_REPOSITORIES } from '@/lib/mock-data';
 import RepoCard from '@/components/RepoCard';
 import type { AnalysisStatus } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -83,10 +82,7 @@ const Repositories: React.FC = () => {
     retry: false,
   });
 
-  // Use API data if available, otherwise fall back to mock data
-  const allRepos = apiRepos && Array.isArray(apiRepos) && apiRepos.length > 0
-    ? apiRepos.map(mapRepoData)
-    : MOCK_REPOSITORIES;
+  const allRepos = Array.isArray(apiRepos) ? apiRepos.map(mapRepoData) : [];
 
   const repos = allRepos.filter((repo) => {
     const matchesSearch =
@@ -191,7 +187,16 @@ const Repositories: React.FC = () => {
           ))}
         </div>
 
-        {repos.length === 0 && (
+        {!isLoading && allRepos.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <AlertCircle className="h-8 w-8 text-muted-foreground/30 mb-3" />
+            <p className="text-sm font-medium text-foreground mb-1">No repositories found</p>
+            <p className="text-xs text-muted-foreground">
+              Connect your GitHub and click "Sync &amp; Analyze" on the dashboard to ingest your repos.
+            </p>
+          </div>
+        )}
+        {!isLoading && allRepos.length > 0 && repos.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <AlertCircle className="h-8 w-8 text-muted-foreground/30 mb-3" />
             <p className="text-sm text-muted-foreground">No repositories match your filters.</p>

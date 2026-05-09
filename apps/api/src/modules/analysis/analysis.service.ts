@@ -144,7 +144,9 @@ export class AnalysisService {
       }
 
       if (analyzed + failed < total) {
-        await this.sleep(1000);
+        // Gemini free tier = 15 RPM → minimum 4s between requests.
+        // Skipping this sleep causes 429 errors on ~75% of calls, marking all repos FAILED.
+        await this.sleep(4100);
       }
     }
 
@@ -236,21 +238,7 @@ Scoring guide:
 - executionMaturity: 1=prototype, 5=functional project, 10=production-deployed
 - originalityScore: 1=tutorial copy, 5=standard project, 10=novel/unique approach`;
 
-    const model = this.genai.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
-    });
-
-    const GEMINI_TIMEOUT_MS = 30_000;
-    const result = await Promise.race([
-      model.generateContent(prompt),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new AppError('Gemini API timeout after 30s', 504, 'AI_TIMEOUT')),
-          GEMINI_TIMEOUT_MS
-        )
-      ),
-    ]);
+    const result = await this.callGeminiWithRetry(prompt);
     const raw = result.response.text();
 
     if (!raw) throw new AppError('Empty Gemini response', 502, 'AI_EMPTY_RESPONSE');
@@ -277,6 +265,42 @@ Scoring guide:
       };
     } catch {
       throw new AppError('Failed to parse Gemini analysis response', 502, 'AI_PARSE_ERROR');
+    }
+  }
+
+  /**
+   * Call Gemini with 30s timeout + exponential backoff retry on 429.
+   * Gemini free tier = 15 RPM. A 429 means we're momentarily over budget;
+   * retry after 8s/16s/32s rather than failing the repo permanently.
+   */
+  private async callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<any> {
+    const model = this.genai.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
+    });
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const GEMINI_TIMEOUT_MS = 30_000;
+        return await Promise.race([
+          model.generateContent(prompt),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new AppError('Gemini API timeout after 30s', 504, 'AI_TIMEOUT')),
+              GEMINI_TIMEOUT_MS
+            )
+          ),
+        ]);
+      } catch (err: any) {
+        const is429 = err?.status === 429 || /429|RESOURCE_EXHAUSTED/i.test(err?.message ?? '');
+        if (is429 && attempt < maxRetries) {
+          const waitMs = Math.pow(2, attempt + 1) * 4000; // 8s, 16s, 32s
+          logger.warn({ attempt, waitMs }, 'Gemini rate limited (429) — backing off');
+          await this.sleep(waitMs);
+          continue;
+        }
+        throw err;
+      }
     }
   }
 

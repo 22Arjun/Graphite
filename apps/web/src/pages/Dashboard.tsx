@@ -18,10 +18,8 @@ import {
   AlertCircle,
   RefreshCw,
 } from 'lucide-react';
-import { MOCK_BUILDER, MOCK_ACTIVITY } from '@/lib/mock-data';
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
-import ActivityTimeline from '@/components/ActivityTimeline';
 import SkillTagCloud from '@/components/SkillTagCloud';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
@@ -38,48 +36,51 @@ const fadeIn = {
   }),
 };
 
-// Map API builder data to mock-compatible shape, falling back to mock for missing fields
+const EMPTY_BUILDER = {
+  display_name: '',
+  wallet_address: '',
+  github_username: null as string | null,
+  bio: null as string | null,
+  ai_summary: null as string | null,
+  skill_tags: [] as any[],
+  reputation: { overall_score: 0, signal_count: 0, dimensions: [] as any[] },
+  github_stats: {
+    total_repos: 0, total_stars: 0, total_forks: 0, total_commits: 0,
+    top_languages: [] as any[],
+  },
+};
+
 function mapBuilderData(apiData: any) {
-  if (!apiData) return MOCK_BUILDER;
+  if (!apiData) return null;
   return {
-    ...MOCK_BUILDER,
-    display_name: apiData.displayName ?? MOCK_BUILDER.display_name,
-    wallet_address: apiData.walletAddress ?? MOCK_BUILDER.wallet_address,
-    github_username: apiData.githubProfile?.username ?? MOCK_BUILDER.github_username,
-    bio: apiData.bio ?? MOCK_BUILDER.bio,
-    ai_summary: apiData.aiSummary ?? MOCK_BUILDER.ai_summary,
-    skill_tags: apiData.skillTags?.length > 0
-      ? apiData.skillTags.map((t: any) => ({
-          name: t.name,
-          category: t.category?.toLowerCase() ?? 'language',
-          confidence: t.confidence,
-          inferred_from: t.inferredFrom ?? [],
-        }))
-      : MOCK_BUILDER.skill_tags,
+    display_name: apiData.displayName || apiData.githubProfile?.name || apiData.githubProfile?.username || '',
+    wallet_address: apiData.walletAddress ?? '',
+    github_username: apiData.githubProfile?.username ?? null,
+    bio: apiData.bio ?? null,
+    ai_summary: apiData.aiSummary ?? null,
+    skill_tags: (apiData.skillTags ?? []).map((t: any) => ({
+      name: t.name,
+      category: t.category?.toLowerCase() ?? 'language',
+      confidence: t.confidence,
+      inferred_from: t.inferredFrom ?? [],
+    })),
     reputation: {
-      overall_score: apiData.reputation?.overallScore ?? MOCK_BUILDER.reputation.overall_score,
-      signal_count: apiData.reputation?.signalCount ?? MOCK_BUILDER.reputation.signal_count,
-      last_computed: MOCK_BUILDER.reputation.last_computed,
-      dimensions: apiData.reputation?.dimensions?.length > 0
-        ? apiData.reputation.dimensions.map((d: any) => ({
-            dimension: d.dimension?.toLowerCase() ?? d.dimension,
-            score: d.score,
-            confidence: d.confidence,
-            signals: d.signals ?? [],
-            trend: d.trend?.toLowerCase() ?? 'stable',
-          }))
-        : MOCK_BUILDER.reputation.dimensions,
+      overall_score: apiData.reputation?.overallScore ?? 0,
+      signal_count: apiData.reputation?.signalCount ?? 0,
+      dimensions: (apiData.reputation?.dimensions ?? []).map((d: any) => ({
+        dimension: d.dimension?.toLowerCase(),
+        score: d.score,
+        confidence: d.confidence,
+        signals: d.signals ?? [],
+        trend: d.trend?.toLowerCase() ?? 'stable',
+      })),
     },
     github_stats: {
-      total_repos: apiData.githubStats?.totalRepos ?? MOCK_BUILDER.github_stats.total_repos,
-      total_stars: apiData.githubStats?.totalStars ?? MOCK_BUILDER.github_stats.total_stars,
-      total_forks: apiData.githubStats?.totalForks ?? MOCK_BUILDER.github_stats.total_forks,
-      total_commits: apiData.githubStats?.totalCommits ?? MOCK_BUILDER.github_stats.total_commits,
-      top_languages: apiData.githubStats?.topLanguages?.length > 0
-        ? apiData.githubStats.topLanguages
-        : MOCK_BUILDER.github_stats.top_languages,
-      contribution_streak: apiData.githubStats?.contributionStreak ?? MOCK_BUILDER.github_stats.contribution_streak,
-      active_days_last_year: MOCK_BUILDER.github_stats.active_days_last_year,
+      total_repos: apiData.githubStats?.totalRepos ?? 0,
+      total_stars: apiData.githubStats?.totalStars ?? 0,
+      total_forks: apiData.githubStats?.totalForks ?? 0,
+      total_commits: apiData.githubStats?.totalCommits ?? 0,
+      top_languages: apiData.githubStats?.topLanguages ?? [],
     },
   };
 }
@@ -147,13 +148,13 @@ const Dashboard: React.FC = () => {
     },
   });
 
-  const builder = mapBuilderData(apiData);
+  const builder = mapBuilderData(apiData) ?? EMPTY_BUILDER;
 
   const stats = [
     { label: 'Repositories', value: builder.github_stats.total_repos, icon: GitBranch, change: '' },
     { label: 'Total Stars', value: builder.github_stats.total_stars, icon: Star, change: '' },
     { label: 'Total Forks', value: builder.github_stats.total_forks, icon: GitFork, change: '' },
-    { label: 'Total Commits', value: builder.github_stats.total_commits.toLocaleString(), icon: Code2, change: '' },
+    { label: 'Commits', value: builder.github_stats.total_commits.toLocaleString(), icon: Code2, change: '' },
   ];
 
   const allJobs: any[] = jobsData ?? [];
@@ -366,24 +367,32 @@ const Dashboard: React.FC = () => {
             <div className="graphite-card p-5">
               <div className="flex items-center gap-3 mb-3">
                 <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
-                  {builder.display_name.charAt(0)}
+                  {(builder.display_name || builder.github_username || '?').charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">{builder.display_name}</h3>
-                  <p className="text-xs text-muted-foreground font-mono">
-                    @{builder.github_username}
-                  </p>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {builder.display_name || builder.github_username || 'Unnamed Builder'}
+                  </h3>
+                  {builder.github_username && (
+                    <p className="text-xs text-muted-foreground font-mono">
+                      @{builder.github_username}
+                    </p>
+                  )}
                 </div>
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">
-                {builder.bio}
+                {builder.bio || 'No bio set.'}
               </p>
               <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground/60 font-mono">
-                <span>{builder.wallet_address.slice(0, 4)}...{builder.wallet_address.slice(-4)}</span>
-                <span className="flex items-center gap-1">
-                  <TrendingUp className="h-2.5 w-2.5 text-primary" />
-                  {builder.github_stats.contribution_streak}d streak
-                </span>
+                {builder.wallet_address && (
+                  <span>{builder.wallet_address.slice(0, 4)}...{builder.wallet_address.slice(-4)}</span>
+                )}
+                {builder.github_stats.total_commits > 0 && (
+                  <span className="flex items-center gap-1">
+                    <TrendingUp className="h-2.5 w-2.5 text-primary" />
+                    {builder.github_stats.total_commits.toLocaleString()} commits
+                  </span>
+                )}
               </div>
             </div>
 
@@ -425,8 +434,27 @@ const Dashboard: React.FC = () => {
 
             {/* Activity feed */}
             <div className="graphite-card p-5">
-              <h3 className="text-sm font-semibold text-foreground mb-4">Recent Activity</h3>
-              <ActivityTimeline events={MOCK_ACTIVITY} maxEvents={5} />
+              <h3 className="text-sm font-semibold text-foreground mb-3">Recent Activity</h3>
+              {builder.github_stats.total_repos > 0 ? (
+                <div className="space-y-2">
+                  {builder.github_stats.top_languages.slice(0, 3).map((lang: any) => (
+                    <div key={lang.language} className="flex items-center justify-between text-xs py-1.5 border-b border-border/30 last:border-0">
+                      <span className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: lang.color }} />
+                        <span className="text-foreground">{lang.language}</span>
+                      </span>
+                      <span className="font-mono text-muted-foreground">{lang.percentage}%</span>
+                    </div>
+                  ))}
+                  <p className="text-[10px] text-muted-foreground/50 pt-1">
+                    {builder.github_stats.total_repos} repos · {builder.github_stats.total_commits.toLocaleString()} commits synced
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground/50">
+                  No activity yet — sync your GitHub to see data here.
+                </p>
+              )}
             </div>
           </motion.div>
         </div>

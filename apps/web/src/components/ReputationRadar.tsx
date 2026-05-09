@@ -14,6 +14,17 @@ const ReputationRadar: React.FC<ReputationRadarProps> = ({ dimensions, size = 28
   const levels = [20, 40, 60, 80, 100];
   const count = dimensions.length;
 
+  if (count === 0) {
+    return (
+      <div
+        className="flex items-center justify-center text-center text-xs text-muted-foreground/50"
+        style={{ width: size, height: size }}
+      >
+        Sync GitHub &amp; run analysis<br />to see reputation radar
+      </div>
+    );
+  }
+
   const points = useMemo(() => {
     return dimensions.map((dim, i) => {
       const angle = (Math.PI * 2 * i) / count - Math.PI / 2;

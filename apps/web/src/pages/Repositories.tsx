@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
-import { Hexagon, Search, Filter, RefreshCw, CheckCircle2, Clock, AlertCircle, Loader2 } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Hexagon, Search, RefreshCw, CheckCircle2, Clock, AlertCircle, Loader2, Play } from 'lucide-react';
 import RepoCard from '@/components/RepoCard';
 import type { AnalysisStatus } from '@/lib/types';
-import { api } from '@/lib/api';
+import { api, analysisApi, profileApi } from '@/lib/api';
+import { useToast } from '@/hooks/use-toast';
 
 const fadeIn = {
   hidden: { opacity: 0, y: 12 },
@@ -72,6 +73,30 @@ function mapRepoData(apiRepo: any) {
 const Repositories: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<AnalysisStatus | 'all'>('all');
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const analyzeRepo = useMutation({
+    mutationFn: (repoId: string) => analysisApi.triggerRepo(repoId),
+    onSuccess: () => {
+      toast({ title: 'Analysis started', description: 'Repository analysis has been queued.' });
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['repositories'] }), 2000);
+    },
+    onError: () => {
+      toast({ title: 'Failed to start analysis', variant: 'destructive' });
+    },
+  });
+
+  const analyzeAll = useMutation({
+    mutationFn: () => profileApi.triggerAnalyzeAll(),
+    onSuccess: () => {
+      toast({ title: 'Re-analysis started', description: 'All pending and failed repos have been queued.' });
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['repositories'] }), 3000);
+    },
+    onError: () => {
+      toast({ title: 'Failed to start re-analysis', variant: 'destructive' });
+    },
+  });
 
   const { data: apiRepos, isLoading } = useQuery({
     queryKey: ['repositories'],
@@ -109,19 +134,35 @@ const Repositories: React.FC = () => {
       >
         {/* Header */}
         <motion.div custom={0} variants={fadeIn} className="mb-6">
-          <div className="flex items-center gap-3 mb-1">
-            <Hexagon className="h-5 w-5 text-primary" strokeWidth={1.5} />
-            <h1 className="text-xl font-bold text-foreground">Repositories</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            GitHub repositories ingested for AI analysis. Each repo contributes to your reputation profile.
-          </p>
-          {isLoading && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground/60 mt-2">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Syncing live data...</span>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <Hexagon className="h-5 w-5 text-primary" strokeWidth={1.5} />
+                <h1 className="text-xl font-bold text-foreground">Repositories</h1>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                GitHub repositories ingested for AI analysis. Each repo contributes to your reputation profile.
+              </p>
+              {isLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground/60 mt-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>Syncing live data...</span>
+                </div>
+              )}
             </div>
-          )}
+            {statusCounts.pending + statusCounts.analyzing > 0 || allRepos.some(r => r.analysis_status === 'failed') ? (
+              <button
+                onClick={() => analyzeAll.mutate()}
+                disabled={analyzeAll.isPending}
+                className="shrink-0 flex items-center gap-1.5 rounded-md bg-primary/10 border border-primary/20 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+              >
+                {analyzeAll.isPending
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <Play className="h-3 w-3" />}
+                Re-analyze All
+              </button>
+            ) : null}
+          </div>
         </motion.div>
 
         {/* Pipeline status */}
@@ -182,7 +223,7 @@ const Repositories: React.FC = () => {
               custom={i + 3}
               variants={fadeIn}
             >
-              <RepoCard repo={repo} onAnalyze={(id) => console.log('Analyze:', id)} />
+              <RepoCard repo={repo} onAnalyze={(id) => analyzeRepo.mutate(id)} />
             </motion.div>
           ))}
         </div>

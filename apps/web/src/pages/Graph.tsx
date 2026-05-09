@@ -9,8 +9,8 @@ import {
   Target,
   ChevronDown,
   ChevronUp,
+  GitMerge,
 } from 'lucide-react';
-import { MOCK_GRAPH, MOCK_RECOMMENDATIONS } from '@/lib/mock-data';
 import GraphCanvas from '@/components/GraphCanvas';
 import { graphApi, recommendationApi } from '@/lib/api';
 
@@ -25,11 +25,11 @@ const fadeIn = {
 
 // Map API graph response to the shape GraphCanvas expects
 function mapGraphData(apiGraph: any) {
-  if (!apiGraph) return MOCK_GRAPH;
+  if (!apiGraph) return null;
   return {
     nodes: apiGraph.nodes ?? [],
     edges: apiGraph.edges ?? [],
-    clusters: MOCK_GRAPH.clusters, // clusters are computed client-side for now
+    clusters: [] as any[],
   };
 }
 
@@ -72,9 +72,8 @@ const Graph: React.FC = () => {
   });
 
   const graph = mapGraphData(graphApiData);
-  const recommendations = recsApiData && recsApiData.length > 0
-    ? recsApiData.map(mapRecommendation)
-    : MOCK_RECOMMENDATIONS;
+  const recommendations = (recsApiData ?? []).map(mapRecommendation);
+  const hasGraph = graph !== null && graph.nodes.length > 0;
 
   return (
     <div className="mx-auto max-w-7xl px-4 lg:px-8 py-8">
@@ -97,9 +96,9 @@ const Graph: React.FC = () => {
         {/* Graph stats */}
         <motion.div custom={1} variants={fadeIn} className="grid grid-cols-3 gap-3 mb-6">
           {[
-            { label: 'Nodes', value: graph.nodes.length, icon: Hexagon },
-            { label: 'Connections', value: graph.edges.length, icon: ArrowRight },
-            { label: 'Clusters', value: graph.clusters.length, icon: Users },
+            { label: 'Nodes', value: hasGraph ? graph!.nodes.length : 0, icon: Hexagon },
+            { label: 'Connections', value: hasGraph ? graph!.edges.length : 0, icon: ArrowRight },
+            { label: 'Builders', value: hasGraph ? graph!.nodes.filter((n: any) => n.type === 'builder').length : 0, icon: Users },
           ].map((stat) => (
             <div key={stat.label} className="graphite-card p-4">
               <div className="flex items-center gap-2 mb-1">
@@ -114,52 +113,30 @@ const Graph: React.FC = () => {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* Graph visualization */}
           <motion.div custom={2} variants={fadeIn} className="xl:col-span-2">
-            <div className="graphite-card p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-semibold text-foreground">Network Map</h2>
-                <span className="text-[10px] text-muted-foreground font-mono">
-                  Click nodes to inspect | Hover to highlight connections
-                </span>
-              </div>
-              <div className="w-full overflow-x-auto">
-                <div className="min-w-[600px]">
-                  <GraphCanvas graph={graph} width={680} height={480} />
+            {hasGraph ? (
+              <div className="graphite-card p-4 sm:p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-semibold text-foreground">Network Map</h2>
+                  <span className="text-[10px] text-muted-foreground font-mono">
+                    Click nodes to inspect | Hover to highlight connections
+                  </span>
+                </div>
+                <div className="w-full overflow-x-auto">
+                  <div className="min-w-[600px]">
+                    <GraphCanvas graph={graph!} width={680} height={480} />
+                  </div>
                 </div>
               </div>
-            </div>
-
-            {/* Clusters */}
-            <div className="graphite-card p-5 mt-4">
-              <h3 className="text-sm font-semibold text-foreground mb-3">Detected Clusters</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {graph.clusters.map((cluster) => (
-                  <div
-                    key={cluster.id}
-                    className="rounded-lg bg-surface-2 border border-border/50 p-3"
-                  >
-                    <h4 className="text-xs font-semibold text-foreground">{cluster.label}</h4>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      {cluster.node_ids.length} members
-                      {cluster.dominant_skill && ` | ${cluster.dominant_skill}`}
-                    </p>
-                    <div className="flex mt-2 -space-x-1.5">
-                      {cluster.node_ids.slice(0, 4).map((nid) => {
-                        const node = graph.nodes.find((n: any) => n.id === nid);
-                        return (
-                          <div
-                            key={nid}
-                            className="h-6 w-6 rounded-full bg-surface-3 border border-surface-1 flex items-center justify-center text-[8px] font-bold text-muted-foreground"
-                            title={node?.label}
-                          >
-                            {node?.label.charAt(0)}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+            ) : (
+              <div className="graphite-card p-12 flex flex-col items-center justify-center text-center">
+                <GitMerge className="h-10 w-10 text-muted-foreground/20 mb-4" />
+                <h3 className="text-sm font-semibold text-foreground mb-1">No graph data yet</h3>
+                <p className="text-xs text-muted-foreground max-w-xs">
+                  Your collaboration graph builds automatically after repositories are analyzed.
+                  Run "Sync &amp; Analyze" from the dashboard to get started.
+                </p>
               </div>
-            </div>
+            )}
           </motion.div>
 
           {/* Recommendations */}
@@ -172,6 +149,13 @@ const Graph: React.FC = () => {
               Builders with complementary skills and shared interests.
             </p>
 
+            {recommendations.length === 0 && (
+              <div className="graphite-card p-6 text-center">
+                <p className="text-xs text-muted-foreground/60">
+                  Recommendations appear once other builders join the platform and are analyzed.
+                </p>
+              </div>
+            )}
             {recommendations.map((rec) => {
               const isExpanded = expandedRec === rec.builder.id;
               return (

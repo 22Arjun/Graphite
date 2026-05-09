@@ -12,6 +12,7 @@ import Dashboard from '@/pages/Dashboard';
 import Profile from '@/pages/Profile';
 import Repositories from '@/pages/Repositories';
 import Graph from '@/pages/Graph';
+import Settings from '@/pages/Settings';
 import NotFound from '@/pages/NotFound';
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
 
@@ -41,6 +42,7 @@ const App = () => {
                 <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                 <Route path="/repositories" element={<ProtectedRoute><Repositories /></ProtectedRoute>} />
                 <Route path="/graph" element={<ProtectedRoute><Graph /></ProtectedRoute>} />
+                <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </AppShell>

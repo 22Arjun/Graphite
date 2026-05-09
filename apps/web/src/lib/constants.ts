@@ -11,6 +11,7 @@ export const NAV_ITEMS = [
   { label: 'Profile', path: '/profile', icon: 'User' },
   { label: 'Repositories', path: '/repositories', icon: 'GitBranch' },
   { label: 'Graph', path: '/graph', icon: 'Share2' },
+  { label: 'Settings', path: '/settings', icon: 'Settings' },
 ] as const;
 
 export const ANALYSIS_STATUS_CONFIG = {

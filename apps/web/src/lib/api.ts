@@ -71,3 +71,10 @@ export const scoringApi = {
   getDimensions: () =>
     api.get('/scoring/dimensions'),
 };
+
+export const profileApi = {
+  update: (data: { displayName?: string; bio?: string }) =>
+    api.patch('/builder/profile', data),
+  triggerAnalyzeAll: () =>
+    api.post('/analysis/trigger-all'),
+};

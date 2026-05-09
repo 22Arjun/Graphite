@@ -28,7 +28,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
   });
 
   // -------------------------------------------------------
-  // GET /api/auth/github — Redirect to GitHub OAuth
+  // GET /api/auth/github — Redirect to GitHub OAuth (server-side nav)
   // -------------------------------------------------------
   fastify.get(
     '/github',
@@ -37,6 +37,20 @@ export default async function authRoutes(fastify: FastifyInstance) {
       const user = request.user as JwtPayload;
       const url = authService.getGitHubAuthUrl(user.sub);
       return reply.redirect(url);
+    }
+  );
+
+  // -------------------------------------------------------
+  // GET /api/auth/github/url — Return OAuth URL as JSON
+  // Frontend calls this with Bearer token, then redirects browser to the returned URL
+  // -------------------------------------------------------
+  fastify.get(
+    '/github/url',
+    { preHandler: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user as JwtPayload;
+      const url = authService.getGitHubAuthUrl(user.sub);
+      return reply.status(200).send({ success: true, data: { url } });
     }
   );
 

@@ -15,6 +15,8 @@ import {
   Loader2,
   Github,
   Play,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { MOCK_BUILDER, MOCK_ACTIVITY } from '@/lib/mock-data';
 import ReputationRadar from '@/components/ReputationRadar';
@@ -111,10 +113,16 @@ const Dashboard: React.FC = () => {
       const response: any = await ingestionApi.getJobs();
       return response.data as any[];
     },
-    refetchInterval: (data: any) => {
-      const jobs: any[] = data?.state?.data ?? [];
+    refetchInterval: (query: any) => {
+      const jobs: any[] = query?.state?.data ?? [];
       const hasActive = jobs.some((j: any) => j.status === 'QUEUED' || j.status === 'PROCESSING');
-      return hasActive ? 3000 : false;
+      if (hasActive) return 3000;
+      // Keep polling briefly after a failure so the error banner appears quickly
+      const hasRecentFailed = jobs.some(
+        (j: any) => j.status === 'FAILED' && j.jobType === 'GITHUB_INGEST' &&
+          Date.now() - new Date(j.updatedAt ?? j.createdAt).getTime() < 60_000
+      );
+      return hasRecentFailed ? 5000 : false;
     },
     retry: false,
   });
@@ -125,8 +133,17 @@ const Dashboard: React.FC = () => {
       toast({ title: 'Analysis started', description: 'GitHub ingestion pipeline has been triggered.' });
       queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] });
     },
-    onError: () => {
-      toast({ title: 'Failed to start analysis', variant: 'destructive' });
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error?.message ?? 'Failed to start analysis';
+      toast({ title: msg, variant: 'destructive' });
+    },
+  });
+
+  const resetJobs = useMutation({
+    mutationFn: () => ingestionApi.reset(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] });
+      toast({ title: 'Jobs reset', description: 'Stuck jobs cleared. You can now retry.' });
     },
   });
 
@@ -139,7 +156,20 @@ const Dashboard: React.FC = () => {
     { label: 'Total Commits', value: builder.github_stats.total_commits.toLocaleString(), icon: Code2, change: '' },
   ];
 
-  const activeJobs = (jobsData ?? []).filter((j: any) => j.status === 'PROCESSING' || j.status === 'QUEUED');
+  const allJobs: any[] = jobsData ?? [];
+  const activeJobs = allJobs.filter((j) => j.status === 'PROCESSING' || j.status === 'QUEUED');
+
+  // A job is "stuck" if it's been PROCESSING for >5 minutes without completing
+  const stuckJob = activeJobs.find(
+    (j) => j.status === 'PROCESSING' &&
+      j.startedAt &&
+      Date.now() - new Date(j.startedAt).getTime() > 5 * 60 * 1000
+  );
+
+  const recentFailedJob = allJobs.find(
+    (j) => j.status === 'FAILED' && j.jobType === 'GITHUB_INGEST' &&
+      Date.now() - new Date(j.updatedAt ?? j.createdAt).getTime() < 10 * 60 * 1000
+  );
   const githubConnected = authBuilder?.githubConnected ?? apiData?.githubProfile != null;
 
   return (
@@ -184,10 +214,30 @@ const Dashboard: React.FC = () => {
 
         {/* Active jobs banner */}
         {activeJobs.length > 0 && (
-          <motion.div custom={1} variants={fadeIn} className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Clock className="h-4 w-4 text-primary animate-pulse" />
-              <span className="text-sm font-medium text-foreground">Analysis in progress</span>
+          <motion.div
+            custom={1} variants={fadeIn}
+            className={`mb-6 rounded-lg border p-4 ${stuckJob ? 'border-amber-500/30 bg-amber-500/5' : 'border-primary/20 bg-primary/5'}`}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                {stuckJob
+                  ? <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+                  : <Clock className="h-4 w-4 text-primary animate-pulse shrink-0" />}
+                <span className="text-sm font-medium text-foreground">
+                  {stuckJob ? 'Job appears stuck — may need a reset' : 'Analysis in progress'}
+                </span>
+              </div>
+              {stuckJob && (
+                <Button
+                  size="sm" variant="outline"
+                  className="border-amber-500/30 text-amber-600 hover:bg-amber-500/10 h-7 text-xs"
+                  onClick={() => resetJobs.mutate()}
+                  disabled={resetJobs.isPending}
+                >
+                  <RefreshCw className={`h-3 w-3 mr-1.5 ${resetJobs.isPending ? 'animate-spin' : ''}`} />
+                  Reset & Retry
+                </Button>
+              )}
             </div>
             {activeJobs.map((job: any) => (
               <div key={job.id} className="mb-2 last:mb-0">
@@ -198,6 +248,30 @@ const Dashboard: React.FC = () => {
                 <Progress value={job.progress} className="h-1.5" />
               </div>
             ))}
+          </motion.div>
+        )}
+
+        {/* Failed job banner */}
+        {!activeJobs.length && recentFailedJob && (
+          <motion.div custom={1} variants={fadeIn} className="mb-6 rounded-lg border border-destructive/20 bg-destructive/5 p-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-foreground">Ingestion failed</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {recentFailedJob.error ?? 'An error occurred during GitHub ingestion.'}
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm" variant="outline"
+              className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10"
+              onClick={() => triggerIngestion.mutate()}
+              disabled={triggerIngestion.isPending}
+            >
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              Retry
+            </Button>
           </motion.div>
         )}
 

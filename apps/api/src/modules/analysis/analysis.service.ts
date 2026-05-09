@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { PrismaClient } from '@prisma/client';
 import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
@@ -7,15 +7,15 @@ import type { AnalysisResult } from './analysis.schema.js';
 
 // ============================================================
 // Analysis Service — AI-powered repository analysis
-// Uses OpenAI to infer skills, architecture quality, and
-// generate builder summaries from repository metadata.
+// Uses Google Gemini to infer skills, architecture quality,
+// and generate builder summaries from repository metadata.
 // ============================================================
 
 export class AnalysisService {
-  private readonly openai: OpenAI;
+  private readonly genai: GoogleGenerativeAI;
 
   constructor(private readonly prisma: PrismaClient) {
-    this.openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    this.genai = new GoogleGenerativeAI(env.GEMINI_API_KEY);
   }
 
   /**
@@ -85,10 +85,12 @@ export class AnalysisService {
       logger.info({ repositoryId, repo: repo.fullName }, 'Repository analysis completed');
       return result;
     } catch (err) {
-      await this.prisma.repository.update({
-        where: { id: repositoryId },
-        data: { analysisStatus: 'FAILED' },
-      });
+      try {
+        await this.prisma.repository.update({
+          where: { id: repositoryId },
+          data: { analysisStatus: 'FAILED' },
+        });
+      } catch { /* ignore DB error so we still rethrow the original */ }
       logger.error({ repositoryId, err }, 'Repository analysis failed');
       throw err;
     }
@@ -98,7 +100,16 @@ export class AnalysisService {
    * Analyze all PENDING repositories for a builder.
    * Returns array of results (failures logged but not thrown).
    */
-  async analyzeBuilderRepositories(builderId: string): Promise<{ analyzed: number; failed: number }> {
+  async analyzeBuilderRepositories(
+    builderId: string,
+    onProgress?: (progress: number, current: number, total: number) => Promise<void>
+  ): Promise<{ analyzed: number; failed: number }> {
+    // Reset any repos stuck in ANALYZING from a prior crashed run
+    await this.prisma.repository.updateMany({
+      where: { builderId, analysisStatus: 'ANALYZING' },
+      data: { analysisStatus: 'FAILED' },
+    });
+
     const repos = await this.prisma.repository.findMany({
       where: {
         builderId,
@@ -109,16 +120,30 @@ export class AnalysisService {
 
     let analyzed = 0;
     let failed = 0;
+    const total = repos.length;
 
     for (const repo of repos) {
       try {
         await this.analyzeRepository(repo.id);
         analyzed++;
-        // Respect OpenAI rate limits
-        await this.sleep(500);
       } catch (err) {
         failed++;
         logger.error({ repoId: repo.id, repo: repo.fullName, err }, 'Failed to analyze repo');
+      }
+
+      // Report per-repo progress (5% → 95%)
+      if (onProgress && total > 0) {
+        const pct = Math.round(5 + ((analyzed + failed) / total) * 90);
+        try {
+          await onProgress(pct, analyzed + failed, total);
+        } catch (progressErr) {
+          // Non-fatal: progress update failure must not abort the analysis loop
+          logger.warn({ err: progressErr }, 'Failed to update analysis progress');
+        }
+      }
+
+      if (analyzed + failed < total) {
+        await this.sleep(1000);
       }
     }
 
@@ -190,7 +215,7 @@ Size (KB): ${repo.size}
 Recent commit messages:
 ${recentCommitMessages || 'No commits available'}
 
-Return ONLY valid JSON (no markdown, no extra text) with this exact structure:
+Return ONLY valid JSON (no markdown, no code fences, no extra text) with this exact structure:
 {
   "architectureComplexity": <1-10 integer>,
   "codeQualitySignals": <1-10 integer>,
@@ -210,20 +235,32 @@ Scoring guide:
 - executionMaturity: 1=prototype, 5=functional project, 10=production-deployed
 - originalityScore: 1=tutorial copy, 5=standard project, 10=novel/unique approach`;
 
-    const response = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 600,
+    const model = this.genai.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) throw new AppError('Empty AI response', 502, 'AI_EMPTY_RESPONSE');
+    const GEMINI_TIMEOUT_MS = 30_000;
+    const result = await Promise.race([
+      model.generateContent(prompt),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new AppError('Gemini API timeout after 30s', 504, 'AI_TIMEOUT')),
+          GEMINI_TIMEOUT_MS
+        )
+      ),
+    ]);
+    const raw = result.response.text();
+
+    if (!raw) throw new AppError('Empty Gemini response', 502, 'AI_EMPTY_RESPONSE');
+
+    // Strip markdown code fences if Gemini wraps the JSON anyway
+    const content = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/m, '').trim();
 
     try {
-      const parsed = JSON.parse(content.trim());
+      const parsed = JSON.parse(content);
       return {
-        repositoryId: '', // filled by caller
+        repositoryId: '',
         architectureComplexity: Math.min(10, Math.max(1, Math.round(parsed.architectureComplexity))),
         codeQualitySignals: Math.min(10, Math.max(1, Math.round(parsed.codeQualitySignals))),
         executionMaturity: Math.min(10, Math.max(1, Math.round(parsed.executionMaturity))),
@@ -238,7 +275,7 @@ Scoring guide:
           : 'none',
       };
     } catch {
-      throw new AppError('Failed to parse AI analysis response', 502, 'AI_PARSE_ERROR');
+      throw new AppError('Failed to parse Gemini analysis response', 502, 'AI_PARSE_ERROR');
     }
   }
 

@@ -49,7 +49,7 @@ export class GitHubService {
   // Core HTTP layer
   // -------------------------------------------------------
 
-  private async request<T>(options: GitHubRequestOptions): Promise<T> {
+  private async request<T>(options: GitHubRequestOptions, timeoutMs = 20_000): Promise<T> {
     const { accessToken, path, params, method = 'GET' } = options;
 
     // Check rate limit before making request
@@ -74,15 +74,29 @@ export class GitHubService {
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v)));
     }
 
-    const response = await fetch(url.toString(), {
-      method,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': GH_API_VERSION,
-        'User-Agent': 'Graphite-API/0.1',
-      },
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        method,
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': GH_API_VERSION,
+          'User-Agent': 'Graphite-API/0.1',
+        },
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        throw new GitHubApiError(`Request timed out after ${timeoutMs}ms: ${path}`, 408, {});
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
 
     // Update rate limit tracking
     this.rateLimitInfo = {
@@ -133,15 +147,16 @@ export class GitHubService {
   // -------------------------------------------------------
 
   /**
-   * Fetch all public repositories for a user.
+   * Fetch all repositories for the authenticated user (public + private).
+   * Uses /user/repos with the OAuth token so private repos are included.
    */
   async fetchUserRepos(accessToken: string, username: string): Promise<GitHubRepoResponse[]> {
     logger.info({ username }, 'Fetching repositories');
 
     return this.paginatedRequest<GitHubRepoResponse>({
       accessToken,
-      path: `/users/${username}/repos`,
-      params: { type: 'owner', sort: 'pushed', direction: 'desc' },
+      path: `/user/repos`,
+      params: { affiliation: 'owner', sort: 'pushed', direction: 'desc', visibility: 'all' },
     });
   }
 
@@ -236,13 +251,25 @@ export class GitHubService {
     const fullName = repoResponse.full_name;
     logger.info({ repo: fullName }, 'Ingesting repository');
 
-    // Parallel fetch: languages, commits, contributors, deployment check
-    const [rawLanguages, rawCommits, rawContributors, hasDeployment] = await Promise.all([
+    // Parallel fetch with allSettled — a single failing endpoint won't abort the others
+    const [langResult, commitResult, contribResult, deployResult] = await Promise.allSettled([
       this.fetchRepoLanguages(accessToken, fullName),
       this.fetchRepoCommits(accessToken, fullName, ownerLogin),
       this.fetchRepoContributors(accessToken, fullName),
       this.checkDeployment(accessToken, fullName, repoResponse.homepage),
     ]);
+
+    if (langResult.status === 'rejected')
+      logger.warn({ repo: fullName, err: langResult.reason }, 'Language fetch failed, using empty');
+    if (commitResult.status === 'rejected')
+      logger.warn({ repo: fullName, err: commitResult.reason }, 'Commit fetch failed, using empty');
+    if (contribResult.status === 'rejected')
+      logger.warn({ repo: fullName, err: contribResult.reason }, 'Contributor fetch failed, using empty');
+
+    const rawLanguages = langResult.status === 'fulfilled' ? langResult.value : {};
+    const rawCommits   = commitResult.status === 'fulfilled' ? commitResult.value : [];
+    const rawContributors = contribResult.status === 'fulfilled' ? contribResult.value : [];
+    const hasDeployment   = deployResult.status === 'fulfilled' ? deployResult.value : false;
 
     // Normalize everything
     const repo = this.normalizeRepo(repoResponse, hasDeployment);

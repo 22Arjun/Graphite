@@ -42,6 +42,8 @@ export const ingestionApi = {
     api.post('/ingestion/trigger', { fullSync }),
   getJobs: () =>
     api.get('/ingestion/jobs'),
+  reset: () =>
+    api.post('/ingestion/reset'),
 };
 
 export const analysisApi = {

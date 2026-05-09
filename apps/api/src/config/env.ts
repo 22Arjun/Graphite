@@ -24,7 +24,7 @@ const envSchema = z.object({
   GITHUB_CLIENT_SECRET: z.string().min(1, 'GITHUB_CLIENT_SECRET is required'),
   GITHUB_REDIRECT_URI: z.string().url('GITHUB_REDIRECT_URI must be a valid URL'),
 
-  OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
+  GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
 
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 

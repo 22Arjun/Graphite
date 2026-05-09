@@ -101,28 +101,21 @@ export class IngestionRepository {
         });
       }
 
-      // Upsert commits (by sha)
-      for (const commit of commits) {
-        await tx.commit.upsert({
-          where: {
-            repositoryId_sha: { repositoryId: repoId, sha: commit.sha },
-          },
-          create: {
+      // Replace commits: delete existing then bulk-insert new ones
+      if (commits.length > 0) {
+        await tx.commit.deleteMany({ where: { repositoryId: repoId } });
+        await tx.commit.createMany({
+          data: commits.map((c) => ({
             repositoryId: repoId,
-            sha: commit.sha,
-            message: commit.message,
-            authorLogin: commit.authorLogin,
-            authorEmail: commit.authorEmail,
-            additions: commit.additions,
-            deletions: commit.deletions,
-            committedAt: commit.committedAt,
-          },
-          update: {
-            message: commit.message,
-            authorLogin: commit.authorLogin,
-            additions: commit.additions,
-            deletions: commit.deletions,
-          },
+            sha: c.sha,
+            message: c.message,
+            authorLogin: c.authorLogin,
+            authorEmail: c.authorEmail,
+            additions: c.additions,
+            deletions: c.deletions,
+            committedAt: c.committedAt,
+          })),
+          skipDuplicates: true,
         });
       }
 
@@ -153,7 +146,7 @@ export class IngestionRepository {
       );
 
       return { repoId, isNew };
-    });
+    }, { timeout: 30000 });
   }
 
   /**

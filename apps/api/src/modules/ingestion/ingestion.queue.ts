@@ -136,8 +136,11 @@ export class JobQueue {
 
   /**
    * Get active/recent jobs for a builder.
+   * Also expires any stale PROCESSING jobs so the frontend always sees accurate state.
    */
   async getBuilderJobs(builderId: string, limit: number = 10): Promise<JobRecord[]> {
+    await this.expireStaleJobs(builderId);
+
     const jobs = await this.prisma.ingestionJob.findMany({
       where: { builderId },
       orderBy: { createdAt: 'desc' },
@@ -147,9 +150,31 @@ export class JobQueue {
   }
 
   /**
+   * Force-fail all stuck PROCESSING jobs for a builder immediately.
+   * Used by the reset endpoint so the user can retry without waiting.
+   */
+  async resetStuckJobs(builderId: string): Promise<number> {
+    const result = await this.prisma.ingestionJob.updateMany({
+      where: {
+        builderId,
+        status: { in: ['PROCESSING', 'QUEUED'] },
+      },
+      data: {
+        status: 'FAILED',
+        error: 'Manually reset by user',
+        completedAt: new Date(),
+      },
+    });
+    logger.info({ builderId, count: result.count }, 'Stuck jobs reset');
+    return result.count;
+  }
+
+  /**
    * Check if a builder has an active ingestion job.
    */
   async hasActiveJob(builderId: string, jobType: JobType): Promise<boolean> {
+    await this.expireStaleJobs(builderId);
+
     const count = await this.prisma.ingestionJob.count({
       where: {
         builderId,
@@ -158,5 +183,24 @@ export class JobQueue {
       },
     });
     return count > 0;
+  }
+
+  /**
+   * Expire any PROCESSING jobs that have been running for >15 minutes.
+   */
+  private async expireStaleJobs(builderId: string): Promise<void> {
+    const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+    await this.prisma.ingestionJob.updateMany({
+      where: {
+        builderId,
+        status: 'PROCESSING',
+        startedAt: { lt: staleThreshold },
+      },
+      data: {
+        status: 'FAILED',
+        error: 'Job timed out — took longer than 15 minutes',
+        completedAt: new Date(),
+      },
+    });
   }
 }

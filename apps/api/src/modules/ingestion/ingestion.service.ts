@@ -97,6 +97,13 @@ export class IngestionService {
   }
 
   /**
+   * Force-fail all stuck jobs for a builder so they can trigger a fresh run.
+   */
+  async resetStuckJobs(builderId: string) {
+    return this.queue.resetStuckJobs(builderId);
+  }
+
+  /**
    * Get all jobs for a builder.
    */
   async getBuilderJobs(builderId: string) {
@@ -195,11 +202,15 @@ export class IngestionService {
         }
       }
 
-      // Phase 4: Update GitHub profile sync timestamp
-      await this.prisma.gitHubProfile.update({
-        where: { builderId },
-        data: { lastSyncedAt: new Date() },
-      });
+      // Phase 4: Update GitHub profile sync timestamp (non-critical)
+      try {
+        await this.prisma.gitHubProfile.update({
+          where: { builderId },
+          data: { lastSyncedAt: new Date() },
+        });
+      } catch (err) {
+        logger.warn({ jobId, err }, 'Failed to update lastSyncedAt, continuing');
+      }
 
       // Complete job with summary
       const summary: IngestionSummary = {
@@ -234,11 +245,16 @@ export class IngestionService {
   private async runPostIngestionPipeline(builderId: string, parentJobId: string): Promise<void> {
     logger.info({ builderId, parentJobId }, 'Starting post-ingestion pipeline');
 
-    // Step 1: Analyze all pending repositories
+    // Step 1: Analyze all pending repositories (with per-repo progress updates)
     const analysisJob = await this.queue.createJob({ builderId, jobType: 'REPO_ANALYSIS' });
     try {
       await this.queue.startJob(analysisJob.id);
-      const { analyzed, failed } = await this.analysis.analyzeBuilderRepositories(builderId);
+      const { analyzed, failed } = await this.analysis.analyzeBuilderRepositories(
+        builderId,
+        async (progress, current, total) => {
+          await this.queue.updateProgress(analysisJob.id, progress, { current, total });
+        }
+      );
       await this.queue.completeJob(analysisJob.id, { analyzed, failed });
       logger.info({ builderId, analyzed, failed }, 'Repo analysis completed');
     } catch (err) {

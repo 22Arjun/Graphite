@@ -38,6 +38,18 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
   });
 
   // -------------------------------------------------------
+  // POST /api/ingestion/reset — Force-fail all stuck jobs
+  // -------------------------------------------------------
+  fastify.post('/reset', async (request: FastifyRequest, reply: FastifyReply) => {
+    const user = request.user as JwtPayload;
+    const count = await ingestionService.resetStuckJobs(user.sub);
+    return reply.status(200).send({
+      success: true,
+      data: { message: `Reset ${count} stuck job(s)` },
+    });
+  });
+
+  // -------------------------------------------------------
   // GET /api/ingestion/jobs — List builder's ingestion jobs
   // -------------------------------------------------------
   fastify.get('/jobs', async (request: FastifyRequest, reply: FastifyReply) => {

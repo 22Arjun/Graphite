@@ -10,13 +10,14 @@ import { logger } from '../../lib/logger.js';
 import type { IngestionSummary } from './ingestion.schema.js';
 
 // ============================================================
-// Ingestion Service — Orchestrates the full GitHub ingestion
-// pipeline: fetch repos → fetch details → normalize → store
+// Ingestion Service — Fast GitHub ingestion pipeline
 //
-// Designed for async execution via job queue.
-// The triggerIngestion method creates a job and runs the
-// pipeline. In production, this would be dispatched to a
-// worker process via BullMQ/Redis.
+// Phase 1 (ingestion): Fetch all repo list + pinned names in
+//   parallel, select up to 5 high-signal repos, then ingest
+//   all 5 in parallel. Completes in ~15-30 seconds.
+//
+// Phase 2 (analysis): AI analysis runs fully async after
+//   ingestion completes. Does not block the user.
 // ============================================================
 
 export class IngestionService {
@@ -37,11 +38,10 @@ export class IngestionService {
   }
 
   /**
-   * Trigger full GitHub ingestion for a builder.
-   * Creates a job, then runs the pipeline asynchronously.
+   * Trigger GitHub ingestion for a builder.
+   * Returns immediately with a jobId; pipeline runs async.
    */
   async triggerIngestion(builderId: string, fullSync: boolean = false): Promise<{ jobId: string }> {
-    // Validate builder exists and has GitHub connected
     const builder = await this.prisma.builder.findUnique({
       where: { id: builderId },
       include: {
@@ -51,29 +51,18 @@ export class IngestionService {
       },
     });
 
-    if (!builder) {
-      throw new NotFoundError('Builder', builderId);
-    }
+    if (!builder) throw new NotFoundError('Builder', builderId);
+    if (!builder.githubProfile) throw new NotFoundError('GitHub profile not connected. Link GitHub first.');
 
-    if (!builder.githubProfile) {
-      throw new NotFoundError('GitHub profile not connected. Link GitHub first.');
-    }
-
-    // Check for active ingestion jobs
     const hasActive = await this.queue.hasActiveJob(builderId, 'GITHUB_INGEST');
-    if (hasActive) {
-      throw new ConflictError('An ingestion job is already running for this builder');
-    }
+    if (hasActive) throw new ConflictError('An ingestion job is already running for this builder');
 
-    // Create job
     const job = await this.queue.createJob({
       builderId,
       jobType: 'GITHUB_INGEST',
       payload: { fullSync },
     });
 
-    // Run pipeline asynchronously (fire-and-forget)
-    // In production: dispatch to BullMQ worker instead
     this.runIngestionPipeline(
       job.id,
       builderId,
@@ -87,31 +76,22 @@ export class IngestionService {
     return { jobId: job.id };
   }
 
-  /**
-   * Get the status of an ingestion job.
-   */
   async getJobStatus(jobId: string) {
     const job = await this.queue.getJob(jobId);
     if (!job) throw new NotFoundError('Job', jobId);
     return job;
   }
 
-  /**
-   * Force-fail all stuck jobs for a builder so they can trigger a fresh run.
-   */
   async resetStuckJobs(builderId: string) {
     return this.queue.resetStuckJobs(builderId);
   }
 
-  /**
-   * Get all jobs for a builder.
-   */
   async getBuilderJobs(builderId: string) {
     return this.queue.getBuilderJobs(builderId);
   }
 
   // -------------------------------------------------------
-  // Pipeline Execution
+  // Phase 1: Fast Ingestion Pipeline
   // -------------------------------------------------------
 
   private async runIngestionPipeline(
@@ -127,82 +107,80 @@ export class IngestionService {
       await this.queue.startJob(jobId);
       logger.info({ jobId, builderId, username }, 'Starting ingestion pipeline');
 
-      // Phase 1: Fetch all repos
+      // Fetch all repos + pinned names in parallel — two independent API calls
       await this.queue.updateProgress(jobId, 5, { phase: 'fetching_repos' });
-      const rawRepos = await this.github.fetchUserRepos(accessToken, username);
+      const [rawRepos, pinnedNames] = await Promise.all([
+        this.github.fetchUserRepos(accessToken, username),
+        this.github.fetchPinnedRepos(accessToken, username),
+      ]);
 
-      // Filter: skip forks unless fullSync, skip archived
+      // Filter archived repos and, unless fullSync, forks
       const filteredRepos = rawRepos.filter((r) => {
         if (r.archived) return false;
         if (r.fork && !fullSync) return false;
         return true;
       });
 
+      // Select up to 5 high-signal repos: pinned → starred → recent
+      const selectedRepos = this.github.selectHighSignalRepos(filteredRepos, pinnedNames);
+
       logger.info(
-        { jobId, total: rawRepos.length, filtered: filteredRepos.length },
-        'Repositories fetched'
+        {
+          jobId,
+          total: rawRepos.length,
+          filtered: filteredRepos.length,
+          selected: selectedRepos.length,
+          pinned: pinnedNames.length,
+        },
+        'Repos selected for ingestion'
       );
 
-      // Phase 2: Detect new/existing repos
-      const existingIds = await this.repo.getExistingGitHubIds(builderId);
-      const reposToProcess = fullSync
-        ? filteredRepos
-        : filteredRepos; // Always process all non-archived for metadata updates
+      await this.queue.updateProgress(jobId, 20, {
+        phase: 'ingesting_repos',
+        total: selectedRepos.length,
+      });
 
-      const totalRepos = reposToProcess.length;
+      // Ingest all selected repos in parallel — the key performance improvement
+      const ingestionResults = await Promise.allSettled(
+        selectedRepos.map((rawRepo) =>
+          this.github.ingestLightweightRepository(accessToken, rawRepo, username)
+        )
+      );
+
+      await this.queue.updateProgress(jobId, 80, { phase: 'persisting' });
+
       let newRepos = 0;
       let updatedRepos = 0;
       let totalCommits = 0;
       let totalContributors = 0;
       const languageSet = new Set<string>();
 
-      // Phase 3: Ingest each repo
-      for (let i = 0; i < totalRepos; i++) {
-        const rawRepo = reposToProcess[i];
-        const progress = 10 + Math.round(((i + 1) / totalRepos) * 85); // 10-95%
+      for (let i = 0; i < ingestionResults.length; i++) {
+        const result = ingestionResults[i];
+        const rawRepo = selectedRepos[i];
+
+        if (result.status === 'rejected') {
+          logger.error({ jobId, repo: rawRepo.full_name, err: result.reason }, 'Repo ingest failed');
+          continue;
+        }
+
+        const ingestionData = result.value;
 
         try {
-          await this.queue.updateProgress(jobId, progress, {
-            phase: 'ingesting_repos',
-            current: i + 1,
-            total: totalRepos,
-            currentRepo: rawRepo.full_name,
-          });
-
-          // Full ingestion: metadata + languages + commits + contributors
-          const ingestionData = await this.github.ingestRepository(
-            accessToken,
-            rawRepo,
-            username
-          );
-
-          // Persist to database
           const { repoId, isNew } = await this.repo.upsertRepository(builderId, ingestionData);
-
-          // Mark owner
           await this.repo.markRepoOwner(repoId, username);
 
-          // Track stats
           if (isNew) newRepos++;
           else updatedRepos++;
           totalCommits += ingestionData.commits.length;
           totalContributors += ingestionData.contributors.length;
           ingestionData.languages.forEach((l) => languageSet.add(l.language));
-
-          // Small delay to be kind to GitHub API
-          if (i < totalRepos - 1) {
-            await this.sleep(300);
-          }
         } catch (err) {
-          // Log error but continue with other repos
-          logger.error(
-            { jobId, repo: rawRepo.full_name, err },
-            'Failed to ingest repository, skipping'
-          );
+          logger.error({ jobId, repo: rawRepo.full_name, err }, 'Failed to persist repo, skipping');
         }
       }
 
-      // Phase 4: Update GitHub profile sync timestamp (non-critical)
+      // Update GitHub profile sync timestamp
       try {
         await this.prisma.gitHubProfile.update({
           where: { builderId },
@@ -212,9 +190,8 @@ export class IngestionService {
         logger.warn({ jobId, err }, 'Failed to update lastSyncedAt, continuing');
       }
 
-      // Complete job with summary
       const summary: IngestionSummary = {
-        totalRepos,
+        totalRepos: selectedRepos.length,
         newRepos,
         updatedRepos,
         totalCommits,
@@ -226,7 +203,7 @@ export class IngestionService {
       await this.queue.completeJob(jobId, summary as unknown as Record<string, unknown>);
       logger.info({ jobId, summary }, 'Ingestion pipeline completed');
 
-      // Chain: Analysis → Scoring → Graph (fire-and-forget)
+      // Phase 2: async AI analysis — does not block ingestion completion
       this.runPostIngestionPipeline(builderId, jobId).catch((err) => {
         logger.error({ jobId, builderId, err }, 'Post-ingestion pipeline failed');
       });
@@ -238,14 +215,20 @@ export class IngestionService {
     }
   }
 
+  // -------------------------------------------------------
+  // Phase 2: Async AI Analysis + Scoring + Graph
+  // -------------------------------------------------------
+
   /**
-   * After ingestion: analyze repos → compute reputation → build graph.
-   * Each step is logged but failures don't stop the chain.
+   * Runs fully async after ingestion completes.
+   * AI analysis is rate-limited but does not block the user.
+   * Repos already COMPLETED (status = COMPLETED) are skipped automatically
+   * by analyzeBuilderRepositories which only targets PENDING/FAILED repos.
    */
   private async runPostIngestionPipeline(builderId: string, parentJobId: string): Promise<void> {
     logger.info({ builderId, parentJobId }, 'Starting post-ingestion pipeline');
 
-    // Step 1: Analyze all pending repositories (with per-repo progress updates)
+    // Step 1: AI analysis of pending repos
     const analysisJob = await this.queue.createJob({ builderId, jobType: 'REPO_ANALYSIS' });
     try {
       await this.queue.startJob(analysisJob.id);
@@ -288,9 +271,5 @@ export class IngestionService {
       await this.queue.failJob(graphJob.id, msg);
       logger.error({ builderId, err }, 'Graph build job failed');
     }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

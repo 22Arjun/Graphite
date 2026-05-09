@@ -12,22 +12,19 @@ import type {
   NormalizedCommit,
   NormalizedContributor,
   RepoIngestionData,
+  ProjectSignals,
 } from './github.types.js';
 import { LANGUAGE_COLORS } from './github.types.js';
 
-// ============================================================
-// GitHub API Service
-// Handles all GitHub REST API communication with:
-// - Automatic pagination
-// - Rate limit awareness
-// - Data normalization
-// - Error handling
-// ============================================================
-
 const GH_API_BASE = 'https://api.github.com';
 const GH_API_VERSION = '2022-11-28';
-const MAX_COMMITS_PER_REPO = 100; // Sample size for pattern analysis
-const MAX_CONTRIBUTORS_PER_REPO = 50;
+const GH_GRAPHQL_URL = 'https://api.github.com/graphql';
+
+// Reduced from 100 — commit timestamps are the signal, not content
+const MAX_COMMITS_PER_REPO = 30;
+const MAX_CONTRIBUTORS_PER_REPO = 30;
+// Maximum repos to deeply ingest per builder
+const MAX_REPOS_TO_INGEST = 5;
 
 interface GitHubRequestOptions {
   accessToken: string;
@@ -49,10 +46,9 @@ export class GitHubService {
   // Core HTTP layer
   // -------------------------------------------------------
 
-  private async request<T>(options: GitHubRequestOptions, timeoutMs = 20_000): Promise<T> {
+  private async request<T>(options: GitHubRequestOptions, timeoutMs = 15_000): Promise<T> {
     const { accessToken, path, params, method = 'GET' } = options;
 
-    // Check rate limit before making request
     if (this.rateLimitInfo.remaining <= 5) {
       const resetTime = this.rateLimitInfo.reset * 1000;
       const waitMs = Math.max(0, resetTime - Date.now()) + 1000;
@@ -98,7 +94,6 @@ export class GitHubService {
       clearTimeout(timer);
     }
 
-    // Update rate limit tracking
     this.rateLimitInfo = {
       remaining: parseInt(response.headers.get('x-ratelimit-remaining') || '5000', 10),
       reset: parseInt(response.headers.get('x-ratelimit-reset') || '0', 10),
@@ -117,13 +112,10 @@ export class GitHubService {
     return (await response.json()) as T;
   }
 
-  /**
-   * Paginated fetch — follows Link headers
-   */
-  private async paginatedRequest<T>(options: GitHubRequestOptions, maxItems: number = 500): Promise<T[]> {
+  private async paginatedRequest<T>(options: GitHubRequestOptions, maxItems: number = 100): Promise<T[]> {
     const results: T[] = [];
     let page = 1;
-    const perPage = 100;
+    const perPage = Math.min(100, maxItems);
 
     while (results.length < maxItems) {
       const items = await this.request<T[]>({
@@ -146,10 +138,6 @@ export class GitHubService {
   // Public API — Fetching
   // -------------------------------------------------------
 
-  /**
-   * Fetch all repositories for the authenticated user (public + private).
-   * Uses /user/repos with the OAuth token so private repos are included.
-   */
   async fetchUserRepos(accessToken: string, username: string): Promise<GitHubRepoResponse[]> {
     logger.info({ username }, 'Fetching repositories');
 
@@ -161,8 +149,125 @@ export class GitHubService {
   }
 
   /**
-   * Fetch language breakdown for a repository.
+   * Fetch pinned repository names via GitHub GraphQL API.
+   * Falls back to [] on any error — pinned data is a bonus, not required.
    */
+  async fetchPinnedRepos(accessToken: string, username: string): Promise<string[]> {
+    const query = `
+      query($login: String!) {
+        user(login: $login) {
+          pinnedItems(first: 6, types: REPOSITORY) {
+            nodes {
+              ... on Repository { nameWithOwner }
+            }
+          }
+        }
+      }
+    `;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      const response = await fetch(GH_GRAPHQL_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'Graphite-API/0.1',
+        },
+        body: JSON.stringify({ query, variables: { login: username } }),
+      });
+
+      if (!response.ok) return [];
+
+      const json = await response.json() as any;
+      const nodes = json?.data?.user?.pinnedItems?.nodes ?? [];
+      return nodes
+        .filter((n: any) => n?.nameWithOwner)
+        .map((n: any) => n.nameWithOwner as string);
+    } catch {
+      logger.warn({ username }, 'Pinned repos fetch failed, continuing without');
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Select up to `max` high-signal repos from the full list.
+   * Priority: pinned → top-starred (non-fork) → recently active.
+   */
+  selectHighSignalRepos(
+    allRepos: GitHubRepoResponse[],
+    pinnedNames: string[],
+    max: number = MAX_REPOS_TO_INGEST
+  ): GitHubRepoResponse[] {
+    const selected = new Map<number, GitHubRepoResponse>();
+
+    const add = (r: GitHubRepoResponse) => {
+      if (!selected.has(r.id) && selected.size < max) selected.set(r.id, r);
+    };
+
+    const pinnedSet = new Set(pinnedNames.map((n) => n.toLowerCase()));
+
+    // 1. Pinned repos
+    for (const r of allRepos) {
+      if (pinnedSet.has(r.full_name.toLowerCase())) add(r);
+    }
+
+    // 2. Top starred non-fork repos
+    const byStars = [...allRepos]
+      .filter((r) => !r.fork && r.stargazers_count > 0)
+      .sort((a, b) => b.stargazers_count - a.stargazers_count);
+    for (const r of byStars) add(r);
+
+    // 3. Recently active (pushed within last 6 months), sorted by recency
+    const sixMonthsAgo = Date.now() - 6 * 30 * 24 * 60 * 60 * 1000;
+    const recentlyActive = [...allRepos]
+      .filter((r) => r.pushed_at && new Date(r.pushed_at).getTime() > sixMonthsAgo)
+      .sort((a, b) => new Date(b.pushed_at!).getTime() - new Date(a.pushed_at!).getTime());
+    for (const r of recentlyActive) add(r);
+
+    return Array.from(selected.values());
+  }
+
+  /**
+   * Detect project maturity signals from repo metadata — no API calls.
+   */
+  detectProjectSignals(repo: GitHubRepoResponse): ProjectSignals {
+    const topics = (repo.topics ?? []).map((t) => t.toLowerCase());
+    const desc = (repo.description ?? '').toLowerCase();
+
+    const hasDocker =
+      topics.some((t) => ['docker', 'dockerfile', 'container', 'containers'].includes(t)) ||
+      /docker|containerized|containerisation/.test(desc);
+
+    const hasCICD =
+      topics.some((t) =>
+        ['ci', 'cd', 'github-actions', 'jenkins', 'circleci', 'travis', 'gitlab-ci'].includes(t)
+      ) || /ci\/cd|pipeline|continuous integration|continuous deployment/.test(desc);
+
+    const hasTests =
+      topics.some((t) =>
+        ['testing', 'jest', 'pytest', 'coverage', 'unit-testing', 'tdd', 'bdd'].includes(t)
+      ) || /\btest[s]?\b|\btdd\b|\bcoverage\b/.test(desc);
+
+    const isMonorepo =
+      topics.some((t) => ['monorepo', 'nx', 'turborepo', 'lerna', 'pnpm-workspace'].includes(t)) ||
+      /monorepo/.test(desc);
+
+    const deploymentMaturity: ProjectSignals['deploymentMaturity'] =
+      repo.homepage || repo.has_pages
+        ? 'production'
+        : hasDocker || hasCICD
+        ? 'basic'
+        : 'none';
+
+    return { hasDocker, hasCICD, hasTests, isMonorepo, deploymentMaturity };
+  }
+
   async fetchRepoLanguages(accessToken: string, fullName: string): Promise<GitHubLanguagesResponse> {
     return this.request<GitHubLanguagesResponse>({
       accessToken,
@@ -170,9 +275,6 @@ export class GitHubService {
     });
   }
 
-  /**
-   * Fetch recent commits (sampled) for contribution pattern analysis.
-   */
   async fetchRepoCommits(
     accessToken: string,
     fullName: string,
@@ -188,17 +290,11 @@ export class GitHubService {
         MAX_COMMITS_PER_REPO
       );
     } catch (err) {
-      // Empty repos or repos with no commits by this author return 409
-      if (err instanceof GitHubApiError && err.ghStatusCode === 409) {
-        return [];
-      }
+      if (err instanceof GitHubApiError && err.ghStatusCode === 409) return [];
       throw err;
     }
   }
 
-  /**
-   * Fetch contributors for a repository.
-   */
   async fetchRepoContributors(accessToken: string, fullName: string): Promise<GitHubContributorResponse[]> {
     try {
       return await this.paginatedRequest<GitHubContributorResponse>(
@@ -209,7 +305,6 @@ export class GitHubService {
         MAX_CONTRIBUTORS_PER_REPO
       );
     } catch (err) {
-      // Some repos return 403 for contributor stats
       if (err instanceof GitHubApiError && (err.ghStatusCode === 403 || err.ghStatusCode === 404)) {
         return [];
       }
@@ -217,67 +312,52 @@ export class GitHubService {
     }
   }
 
-  /**
-   * Check if repo has GitHub Pages or Vercel/Netlify deployment signals.
-   */
-  async checkDeployment(accessToken: string, fullName: string, homepage: string | null): Promise<boolean> {
-    // Homepage URL is a strong deployment signal
-    if (homepage && homepage.length > 0) return true;
-
-    try {
-      const deployments = await this.request<{ id: number }[]>({
-        accessToken,
-        path: `/repos/${fullName}/deployments`,
-        params: { per_page: 1 },
-      });
-      return deployments.length > 0;
-    } catch {
-      return false;
-    }
-  }
-
   // -------------------------------------------------------
-  // Public API — Full Repo Ingestion
+  // Lightweight Repo Ingestion (replaces ingestRepository)
   // -------------------------------------------------------
 
   /**
-   * Fully ingest a single repository: metadata + languages + commits + contributors.
+   * Ingest a single repo with high-signal metadata only.
+   * Deployment detection is heuristic-only (no extra API call).
+   * Commits are capped at MAX_COMMITS_PER_REPO for behavioral signals.
+   * All sub-fetches run in parallel.
    */
-  async ingestRepository(
+  async ingestLightweightRepository(
     accessToken: string,
     repoResponse: GitHubRepoResponse,
     ownerLogin: string
   ): Promise<RepoIngestionData> {
     const fullName = repoResponse.full_name;
-    logger.info({ repo: fullName }, 'Ingesting repository');
+    logger.info({ repo: fullName }, 'Ingesting repository (lightweight)');
 
-    // Parallel fetch with allSettled — a single failing endpoint won't abort the others
-    const [langResult, commitResult, contribResult, deployResult] = await Promise.allSettled([
+    const projectSignals = this.detectProjectSignals(repoResponse);
+
+    const [langResult, commitResult, contribResult] = await Promise.allSettled([
       this.fetchRepoLanguages(accessToken, fullName),
       this.fetchRepoCommits(accessToken, fullName, ownerLogin),
       this.fetchRepoContributors(accessToken, fullName),
-      this.checkDeployment(accessToken, fullName, repoResponse.homepage),
     ]);
 
     if (langResult.status === 'rejected')
-      logger.warn({ repo: fullName, err: langResult.reason }, 'Language fetch failed, using empty');
+      logger.warn({ repo: fullName, err: langResult.reason }, 'Language fetch failed');
     if (commitResult.status === 'rejected')
-      logger.warn({ repo: fullName, err: commitResult.reason }, 'Commit fetch failed, using empty');
+      logger.warn({ repo: fullName, err: commitResult.reason }, 'Commit fetch failed');
     if (contribResult.status === 'rejected')
-      logger.warn({ repo: fullName, err: contribResult.reason }, 'Contributor fetch failed, using empty');
+      logger.warn({ repo: fullName, err: contribResult.reason }, 'Contributor fetch failed');
 
     const rawLanguages = langResult.status === 'fulfilled' ? langResult.value : {};
     const rawCommits   = commitResult.status === 'fulfilled' ? commitResult.value : [];
     const rawContributors = contribResult.status === 'fulfilled' ? contribResult.value : [];
-    const hasDeployment   = deployResult.status === 'fulfilled' ? deployResult.value : false;
 
-    // Normalize everything
-    const repo = this.normalizeRepo(repoResponse, hasDeployment);
-    const languages = this.normalizeLanguages(rawLanguages);
-    const commits = this.normalizeCommits(rawCommits);
-    const contributors = this.normalizeContributors(rawContributors);
+    const hasDeployment = projectSignals.deploymentMaturity !== 'none';
 
-    return { repo, languages, commits, contributors };
+    return {
+      repo: this.normalizeRepo(repoResponse, hasDeployment),
+      languages: this.normalizeLanguages(rawLanguages),
+      commits: this.normalizeCommits(rawCommits),
+      contributors: this.normalizeContributors(rawContributors),
+      projectSignals,
+    };
   }
 
   // -------------------------------------------------------
@@ -319,7 +399,7 @@ export class GitHubService {
       .map(([language, bytes]) => ({
         language,
         bytes,
-        percentage: Math.round((bytes / total) * 10000) / 100, // 2 decimal places
+        percentage: Math.round((bytes / total) * 10000) / 100,
         color: LANGUAGE_COLORS[language] || '#6e7681',
       }))
       .sort((a, b) => b.bytes - a.bytes);
@@ -328,7 +408,7 @@ export class GitHubService {
   normalizeCommits(raw: GitHubCommitResponse[]): NormalizedCommit[] {
     return raw.map((c) => ({
       sha: c.sha,
-      message: c.commit.message.slice(0, 500), // Truncate long messages
+      message: c.commit.message.split('\n')[0].slice(0, 200),
       authorLogin: c.author?.login || null,
       authorEmail: c.commit.author.email,
       additions: c.stats?.additions || 0,
@@ -345,10 +425,6 @@ export class GitHubService {
       contributions: c.contributions,
     }));
   }
-
-  // -------------------------------------------------------
-  // Rate limit status
-  // -------------------------------------------------------
 
   getRateLimitInfo(): RateLimitInfo {
     return { ...this.rateLimitInfo };

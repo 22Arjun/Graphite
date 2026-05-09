@@ -2,6 +2,14 @@
 // GitHub Service Types — Internal representations
 // ============================================================
 
+export interface ProjectSignals {
+  hasDocker: boolean;
+  hasCICD: boolean;
+  hasTests: boolean;
+  isMonorepo: boolean;
+  deploymentMaturity: 'none' | 'basic' | 'production';
+}
+
 export interface NormalizedRepo {
   githubId: number;
   name: string;
@@ -56,6 +64,7 @@ export interface RepoIngestionData {
   languages: NormalizedLanguage[];
   commits: NormalizedCommit[];
   contributors: NormalizedContributor[];
+  projectSignals: ProjectSignals;
 }
 
 // Language color map for common languages

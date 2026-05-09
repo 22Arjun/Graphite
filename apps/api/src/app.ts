@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
 import fastifySensible from '@fastify/sensible';
 import fastifyRateLimit from '@fastify/rate-limit';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { AppError } from './lib/errors.js';
@@ -105,6 +107,43 @@ export async function buildApp() {
   // Register plugins
   // -------------------------------------------------------
   await app.register(corsPlugin);
+
+  await app.register(fastifySwagger, {
+    openapi: {
+      info: {
+        title: 'Graphite API',
+        description: 'AI-powered Builder Reputation Graph — REST API',
+        version: '1.0.0',
+      },
+      servers: [{ url: `http://localhost:${env.PORT}` }],
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+          },
+        },
+      },
+      security: [{ bearerAuth: [] }],
+      tags: [
+        { name: 'auth', description: 'Authentication — wallet sign-in, GitHub OAuth' },
+        { name: 'builder', description: 'Builder profile, repositories, stats' },
+        { name: 'ingestion', description: 'GitHub ingestion pipeline and job management' },
+        { name: 'analysis', description: 'AI repository analysis' },
+        { name: 'scoring', description: 'Reputation dimension scoring' },
+        { name: 'graph', description: 'Collaboration graph' },
+        { name: 'recommendation', description: 'Collaborator recommendations' },
+      ],
+    },
+  });
+
+  await app.register(fastifySwaggerUi, {
+    routePrefix: '/docs',
+    uiConfig: { docExpansion: 'list', deepLinking: true },
+    staticCSP: true,
+  });
+
   await app.register(fastifySensible);
   await app.register(fastifyRateLimit, {
     max: env.RATE_LIMIT_MAX,

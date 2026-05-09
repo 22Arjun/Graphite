@@ -32,8 +32,22 @@ enum JobType {
   REPO_ANALYSIS
   REPUTATION_COMPUTE
   GRAPH_BUILD
+  RESUME_PARSE
 
   @@map("job_type")
+}
+
+enum EducationLevel {
+  HIGH_SCHOOL
+  ASSOCIATE
+  BACHELOR
+  MASTER
+  PHD
+  BOOTCAMP
+  SELF_TAUGHT
+  OTHER
+
+  @@map("education_level")
 }
 
 enum JobStatus {
@@ -94,6 +108,12 @@ model Builder {
   reputationScores ReputationScore[]
   skillTags        SkillTag[]
   ingestionJobs    IngestionJob[]
+
+  // External reputation sources
+  linkedInData      LinkedInData?
+  twitterData       TwitterData?
+  hackathonEntries  HackathonEntry[]
+  resumeData        ResumeData?
 
   // Graph edges where this builder is the source
   outgoingEdges CollaborationEdge[] @relation("edge_source")
@@ -349,4 +369,85 @@ model IngestionJob {
   @@index([status, jobType])
   @@index([createdAt])
   @@map("ingestion_jobs")
+}
+
+// -------------------------------------------------------
+// External Reputation Sources
+// -------------------------------------------------------
+
+/// Manually-entered LinkedIn professional data
+model LinkedInData {
+  id              String          @id @default(uuid()) @db.Uuid
+  builderId       String          @unique @map("builder_id") @db.Uuid
+  headline        String?
+  currentRole     String?         @map("current_role")
+  company         String?
+  yearsExperience Int             @default(0) @map("years_experience")
+  educationLevel  EducationLevel? @map("education_level")
+  skills          String[]        @default([])
+  summary         String?         @db.Text
+  addedAt         DateTime        @default(now()) @map("added_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@map("linkedin_data")
+}
+
+/// Twitter/X public profile data (fetched via handle)
+model TwitterData {
+  id              String    @id @default(uuid()) @db.Uuid
+  builderId       String    @unique @map("builder_id") @db.Uuid
+  handle          String
+  followerCount   Int       @default(0) @map("follower_count")
+  followingCount  Int       @default(0) @map("following_count")
+  tweetCount      Int       @default(0) @map("tweet_count")
+  accountAgeYears Float     @default(0) @map("account_age_years")
+  bio             String?
+  fetchedAt       DateTime? @map("fetched_at")
+  addedAt         DateTime  @default(now()) @map("added_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@map("twitter_data")
+}
+
+/// Manually-entered hackathon participation records
+model HackathonEntry {
+  id          String   @id @default(uuid()) @db.Uuid
+  builderId   String   @map("builder_id") @db.Uuid
+  name        String
+  year        Int
+  placement   String?
+  prize       String?
+  projectName String?  @map("project_name")
+  projectUrl  String?  @map("project_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@index([builderId])
+  @@map("hackathon_entries")
+}
+
+/// AI-parsed resume data extracted from uploaded PDF
+model ResumeData {
+  id              String          @id @default(uuid()) @db.Uuid
+  builderId       String          @unique @map("builder_id") @db.Uuid
+  parsedSkills    String[]        @default([]) @map("parsed_skills")
+  parsedTechStack String[]        @default([]) @map("parsed_tech_stack")
+  yearsExperience Int             @default(0) @map("years_experience")
+  educationLevel  EducationLevel? @map("education_level")
+  currentRole     String?         @map("current_role")
+  summary         String?         @db.Text
+  rawText         String?         @map("raw_text") @db.Text
+  parsedAt        DateTime?       @map("parsed_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@map("resume_data")
 }

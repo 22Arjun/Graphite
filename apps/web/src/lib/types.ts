@@ -25,6 +25,15 @@ export interface ReputationProfile {
   signal_count: number;
 }
 
+// --- Connected Sources ---
+export interface ConnectedSources {
+  github: boolean;
+  linkedin: boolean;
+  twitter: boolean;
+  hackathons: number;
+  resume: boolean;
+}
+
 // --- Builder Profile ---
 export interface BuilderProfile {
   id: string;
@@ -37,6 +46,7 @@ export interface BuilderProfile {
   skill_tags: SkillTag[];
   reputation: ReputationProfile;
   github_stats: GitHubStats;
+  connected_sources: ConnectedSources;
   analysis_status: AnalysisStatus;
   created_at: string;
   updated_at: string;

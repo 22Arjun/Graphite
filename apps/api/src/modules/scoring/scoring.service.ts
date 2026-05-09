@@ -1,4 +1,4 @@
-import type { PrismaClient, ReputationDimension } from '@prisma/client';
+import type { PrismaClient, ReputationDimension, LinkedInData, TwitterData, HackathonEntry, ResumeData } from '@prisma/client';
 import { logger } from '../../lib/logger.js';
 import { NotFoundError } from '../../lib/errors.js';
 import type { DimensionScore } from './scoring.schema.js';
@@ -31,6 +31,10 @@ export class ScoringService {
             contributors: true,
           },
         },
+        linkedInData: true,
+        twitterData: true,
+        hackathonEntries: true,
+        resumeData: true,
       },
     });
 
@@ -43,13 +47,52 @@ export class ScoringService {
       return [];
     }
 
-    const scores: DimensionScore[] = [
-      this.computeTechnicalDepth(repos),
-      this.computeExecutionAbility(repos),
-      this.computeConsistency(repos),
-      this.computeCollaborationQuality(repos),
-      this.computeInnovation(repos),
-    ];
+    const { linkedInData, twitterData, hackathonEntries, resumeData } = builder;
+
+    const dimensions = ['TECHNICAL_DEPTH', 'EXECUTION_ABILITY', 'CONSISTENCY', 'COLLABORATION_QUALITY', 'INNOVATION'] as const;
+
+    const githubScores: Record<string, DimensionScore> = {
+      TECHNICAL_DEPTH: this.computeTechnicalDepth(repos),
+      EXECUTION_ABILITY: this.computeExecutionAbility(repos),
+      CONSISTENCY: this.computeConsistency(repos),
+      COLLABORATION_QUALITY: this.computeCollaborationQuality(repos),
+      INNOVATION: this.computeInnovation(repos),
+    };
+
+    const sourceCount = [
+      linkedInData,
+      twitterData,
+      hackathonEntries.length > 0,
+      resumeData,
+    ].filter(Boolean).length;
+
+    const scores: DimensionScore[] = dimensions.map((dim) => {
+      const base = githubScores[dim];
+
+      const linkedInBonus = this.computeLinkedInBonus(linkedInData, dim);
+      const hackathonBonus = this.computeHackathonBonus(hackathonEntries, dim);
+      const twitterBonus = this.computeTwitterBonus(twitterData, dim);
+      const resumeBonus = this.computeResumeBonus(resumeData, dim);
+
+      const totalBonus = linkedInBonus.bonus + hackathonBonus.bonus + twitterBonus.bonus + resumeBonus.bonus;
+      const finalScore = Math.min(100, Math.round(base.score + totalBonus));
+      const finalConfidence = Math.min(1.0, base.confidence + sourceCount * 0.1);
+      const allSignals = [
+        ...base.signals,
+        ...linkedInBonus.signals,
+        ...hackathonBonus.signals,
+        ...twitterBonus.signals,
+        ...resumeBonus.signals,
+      ];
+
+      return {
+        dimension: dim,
+        score: finalScore,
+        confidence: finalConfidence,
+        signals: allSignals,
+        trend: base.trend,
+      };
+    });
 
     // Batch all 5 dimension upserts in a single transaction to reduce lock contention
     await this.prisma.$transaction(
@@ -288,6 +331,106 @@ export class ScoringService {
       signals,
       trend: 'STABLE',
     };
+  }
+
+  // -------------------------------------------------------
+  // Multi-Source Bonus Functions
+  // -------------------------------------------------------
+
+  private computeLinkedInBonus(
+    data: LinkedInData | null,
+    dimension: string
+  ): { bonus: number; signals: string[] } {
+    if (!data) return { bonus: 0, signals: [] };
+    const signals: string[] = [];
+    let bonus = 0;
+
+    if (dimension === 'TECHNICAL_DEPTH') {
+      const expBonus = data.yearsExperience >= 3 ? 5 : 2;
+      const skillsBonus = data.skills.length >= 5 ? 3 : 0;
+      bonus = expBonus + skillsBonus;
+      if (expBonus > 0) signals.push(`LinkedIn: ${data.yearsExperience} years experience`);
+      if (skillsBonus > 0) signals.push(`LinkedIn: ${data.skills.length} endorsed skills`);
+    } else if (dimension === 'EXECUTION_ABILITY') {
+      const roleBonus = data.currentRole ? 5 : 0;
+      const eduBonus = data.educationLevel && ['BACHELOR', 'MASTER', 'PHD'].includes(data.educationLevel) ? 2 : 0;
+      bonus = roleBonus + eduBonus;
+      if (roleBonus > 0) signals.push(`LinkedIn: ${data.currentRole}`);
+    } else if (dimension === 'CONSISTENCY') {
+      bonus = Math.min(8, Math.round(data.yearsExperience * 0.8));
+      if (bonus > 0) signals.push(`LinkedIn: ${data.yearsExperience} years consistent career`);
+    }
+
+    return { bonus, signals };
+  }
+
+  private computeHackathonBonus(
+    entries: HackathonEntry[],
+    dimension: string
+  ): { bonus: number; signals: string[] } {
+    if (entries.length === 0) return { bonus: 0, signals: [] };
+    const signals: string[] = [];
+    const wins = entries.filter((e) => e.placement && /1st|winner|first|champion/i.test(e.placement)).length;
+    let bonus = 0;
+
+    if (dimension === 'EXECUTION_ABILITY') {
+      bonus = Math.min(12, entries.length * 2 + wins * 3);
+      signals.push(`${entries.length} hackathon${entries.length > 1 ? 's' : ''} participated`);
+      if (wins > 0) signals.push(`${wins} hackathon win${wins > 1 ? 's' : ''}`);
+    } else if (dimension === 'INNOVATION') {
+      bonus = Math.min(10, Math.round(entries.length * 1.5) + wins * 2);
+      signals.push(`Hackathon participation signals innovation`);
+    } else if (dimension === 'TECHNICAL_DEPTH') {
+      bonus = Math.min(5, entries.length);
+    }
+
+    return { bonus, signals };
+  }
+
+  private computeTwitterBonus(
+    data: TwitterData | null,
+    dimension: string
+  ): { bonus: number; signals: string[] } {
+    if (!data) return { bonus: 0, signals: [] };
+    const signals: string[] = [];
+    let bonus = 0;
+
+    if (dimension === 'COLLABORATION_QUALITY') {
+      bonus = Math.min(8, Math.round(Math.log10(data.followerCount + 1) * 4));
+      if (bonus > 0) signals.push(`Twitter: ${data.followerCount.toLocaleString()} followers`);
+    } else if (dimension === 'INNOVATION') {
+      bonus = data.accountAgeYears >= 2 ? 3 : 0;
+      if (bonus > 0) signals.push(`Twitter: established tech presence`);
+    }
+
+    return { bonus, signals };
+  }
+
+  private computeResumeBonus(
+    data: ResumeData | null,
+    dimension: string
+  ): { bonus: number; signals: string[] } {
+    if (!data) return { bonus: 0, signals: [] };
+    const signals: string[] = [];
+    let bonus = 0;
+
+    if (dimension === 'TECHNICAL_DEPTH') {
+      const skillsBonus = Math.min(8, Math.round(data.parsedSkills.length * 0.5));
+      const stackBonus = data.parsedTechStack.length >= 5 ? 4 : 0;
+      bonus = skillsBonus + stackBonus;
+      if (skillsBonus > 0) signals.push(`Resume: ${data.parsedSkills.length} skills identified`);
+      if (stackBonus > 0) signals.push(`Resume: ${data.parsedTechStack.length} technologies`);
+    } else if (dimension === 'EXECUTION_ABILITY') {
+      const expBonus = Math.min(6, Math.round(data.yearsExperience * 0.8));
+      const eduBonus = data.educationLevel && ['BACHELOR', 'MASTER', 'PHD'].includes(data.educationLevel) ? 3 : 0;
+      bonus = expBonus + eduBonus;
+      if (expBonus > 0) signals.push(`Resume: ${data.yearsExperience} years of experience`);
+    } else if (dimension === 'CONSISTENCY') {
+      bonus = data.yearsExperience >= 2 ? 4 : 0;
+      if (bonus > 0) signals.push(`Resume confirms consistent career`);
+    }
+
+    return { bonus, signals };
   }
 
   // -------------------------------------------------------

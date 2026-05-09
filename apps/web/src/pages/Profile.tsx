@@ -5,12 +5,15 @@ import {
   Hexagon,
   Github,
   Wallet,
-  Calendar,
   TrendingUp,
-  ExternalLink,
   Sparkles,
   Copy,
   Loader2,
+  Linkedin,
+  Twitter,
+  Trophy,
+  FileText,
+  Link as LinkIcon,
 } from 'lucide-react';
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
@@ -74,6 +77,13 @@ function mapBuilderData(apiData: any) {
       total_forks: apiData.githubStats?.totalForks ?? 0,
       total_commits: apiData.githubStats?.totalCommits ?? 0,
       top_languages: apiData.githubStats?.topLanguages ?? [],
+    },
+    connected_sources: {
+      github: !!(apiData.connectedSources?.github ?? apiData.githubProfile),
+      linkedin: !!(apiData.connectedSources?.linkedin),
+      twitter: !!(apiData.connectedSources?.twitter),
+      hackathons: apiData.connectedSources?.hackathons ?? 0,
+      resume: !!(apiData.connectedSources?.resume),
     },
   };
 }
@@ -155,6 +165,34 @@ const Profile: React.FC = () => {
                 <p className="text-xs text-muted-foreground mt-2 max-w-md">
                   {builder.bio || 'No bio set.'}
                 </p>
+                {/* Source badges */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-3">
+                  {builder.connected_sources.github && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                      <Github className="h-2.5 w-2.5" />GitHub
+                    </span>
+                  )}
+                  {builder.connected_sources.linkedin && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 text-[10px] font-medium text-blue-400">
+                      <Linkedin className="h-2.5 w-2.5" />LinkedIn
+                    </span>
+                  )}
+                  {builder.connected_sources.twitter && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 text-[10px] font-medium text-sky-400">
+                      <Twitter className="h-2.5 w-2.5" />Twitter
+                    </span>
+                  )}
+                  {builder.connected_sources.hackathons > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/10 border border-yellow-500/20 px-2 py-0.5 text-[10px] font-medium text-yellow-400">
+                      <Trophy className="h-2.5 w-2.5" />{builder.connected_sources.hackathons} Hackathon{builder.connected_sources.hackathons > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {builder.connected_sources.resume && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 text-[10px] font-medium text-purple-400">
+                      <FileText className="h-2.5 w-2.5" />Resume
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -189,7 +227,7 @@ const Profile: React.FC = () => {
               <h3 className="text-sm font-semibold text-foreground mt-4">Overall Reputation</h3>
               <p className="text-xs text-muted-foreground mt-1 text-center">
                 {builder.reputation.signal_count > 0
-                  ? `Based on ${builder.reputation.signal_count} signals`
+                  ? `Based on ${Object.values(builder.connected_sources).filter(Boolean).length} sources · ${builder.reputation.signal_count} signals`
                   : 'Run analysis to compute score'}
               </p>
             </div>

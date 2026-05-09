@@ -26,6 +26,9 @@ const envSchema = z.object({
 
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
 
+  // Optional: Twitter API v2 bearer token for public profile fetching
+  TWITTER_BEARER_TOKEN: z.string().optional(),
+
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 
   RATE_LIMIT_MAX: z.coerce.number().default(100),

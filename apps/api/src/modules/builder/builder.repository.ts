@@ -51,7 +51,11 @@ export interface BuilderWithRelations {
     repositories: number;
     outgoingEdges: number;
     incomingEdges: number;
+    hackathonEntries: number;
   };
+  linkedInData: { currentRole: string | null; company: string | null } | null;
+  twitterData: { handle: string; followerCount: number } | null;
+  resumeData: { currentRole: string | null; parsedSkills: string[] } | null;
 }
 
 export class BuilderRepository {
@@ -112,7 +116,17 @@ export class BuilderRepository {
             repositories: true,
             outgoingEdges: true,
             incomingEdges: true,
+            hackathonEntries: true,
           },
+        },
+        linkedInData: {
+          select: { currentRole: true, company: true },
+        },
+        twitterData: {
+          select: { handle: true, followerCount: true },
+        },
+        resumeData: {
+          select: { currentRole: true, parsedSkills: true },
         },
       },
     }) as unknown as BuilderWithRelations | null;

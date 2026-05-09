@@ -40,6 +40,13 @@ export class BuilderService {
         dimensions: builder.reputationScores,
         signalCount: dimensions.reduce((sum, d) => sum + d.signals.length, 0),
       },
+      connectedSources: {
+        github: !!builder.githubProfile,
+        linkedin: !!builder.linkedInData,
+        twitter: !!builder.twitterData,
+        hackathons: builder._count.hackathonEntries,
+        resume: !!builder.resumeData,
+      },
     };
   }
 

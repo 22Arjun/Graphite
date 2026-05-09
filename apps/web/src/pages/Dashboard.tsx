@@ -17,6 +17,11 @@ import {
   Play,
   AlertCircle,
   RefreshCw,
+  Linkedin,
+  Twitter,
+  Trophy,
+  FileText,
+  Zap,
 } from 'lucide-react';
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
@@ -81,6 +86,13 @@ function mapBuilderData(apiData: any) {
       total_forks: apiData.githubStats?.totalForks ?? 0,
       total_commits: apiData.githubStats?.totalCommits ?? 0,
       top_languages: apiData.githubStats?.topLanguages ?? [],
+    },
+    connected_sources: {
+      github: !!(apiData.connectedSources?.github ?? apiData.githubProfile),
+      linkedin: !!(apiData.connectedSources?.linkedin),
+      twitter: !!(apiData.connectedSources?.twitter),
+      hackathons: apiData.connectedSources?.hackathons ?? 0,
+      resume: !!(apiData.connectedSources?.resume),
     },
   };
 }
@@ -395,6 +407,70 @@ const Dashboard: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Boost Your Score */}
+            {apiData && (
+              <div className="graphite-card p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <Zap className="h-3.5 w-3.5 text-primary" />
+                    Boost Your Score
+                  </h3>
+                  <span className="text-xs font-mono text-primary">
+                    {[
+                      builder.connected_sources.github,
+                      builder.connected_sources.linkedin,
+                      builder.connected_sources.twitter,
+                      builder.connected_sources.hackathons > 0,
+                      builder.connected_sources.resume,
+                    ].filter(Boolean).length} / 5
+                  </span>
+                </div>
+                <p className="text-[10px] text-muted-foreground mb-3">Connect more sources for higher accuracy and confidence.</p>
+                <div className="flex gap-1 mb-3">
+                  {[
+                    { key: 'github', color: 'bg-emerald-500' },
+                    { key: 'linkedin', color: 'bg-blue-500' },
+                    { key: 'twitter', color: 'bg-sky-500' },
+                    { key: 'hackathons', color: 'bg-yellow-500' },
+                    { key: 'resume', color: 'bg-purple-500' },
+                  ].map((s) => {
+                    const active = s.key === 'hackathons' ? builder.connected_sources.hackathons > 0 : !!(builder.connected_sources as any)[s.key];
+                    return <div key={s.key} className={`flex-1 h-1.5 rounded-full ${active ? s.color : 'bg-surface-3'}`} />;
+                  })}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {!builder.connected_sources.linkedin && (
+                    <Link to="/settings" className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/5 px-2.5 py-1 text-[10px] font-medium text-blue-400 hover:bg-blue-500/10 transition-colors">
+                      <Linkedin className="h-2.5 w-2.5" />+ LinkedIn
+                    </Link>
+                  )}
+                  {!builder.connected_sources.twitter && (
+                    <Link to="/settings" className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/5 px-2.5 py-1 text-[10px] font-medium text-sky-400 hover:bg-sky-500/10 transition-colors">
+                      <Twitter className="h-2.5 w-2.5" />+ Twitter
+                    </Link>
+                  )}
+                  {builder.connected_sources.hackathons === 0 && (
+                    <Link to="/settings" className="inline-flex items-center gap-1 rounded-full border border-yellow-500/30 bg-yellow-500/5 px-2.5 py-1 text-[10px] font-medium text-yellow-400 hover:bg-yellow-500/10 transition-colors">
+                      <Trophy className="h-2.5 w-2.5" />+ Hackathons
+                    </Link>
+                  )}
+                  {!builder.connected_sources.resume && (
+                    <Link to="/settings" className="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/5 px-2.5 py-1 text-[10px] font-medium text-purple-400 hover:bg-purple-500/10 transition-colors">
+                      <FileText className="h-2.5 w-2.5" />+ Resume
+                    </Link>
+                  )}
+                  {[
+                    builder.connected_sources.linkedin,
+                    builder.connected_sources.twitter,
+                    builder.connected_sources.hackathons > 0,
+                    builder.connected_sources.resume,
+                  ].every(Boolean) && (
+                    <p className="text-[10px] text-primary">All sources connected!</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Quick actions */}
             <div className="graphite-card p-5">

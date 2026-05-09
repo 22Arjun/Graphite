@@ -78,3 +78,28 @@ export const profileApi = {
   triggerAnalyzeAll: () =>
     api.post('/analysis/trigger-all'),
 };
+
+export const sourcesApi = {
+  getSummary: () => api.get('/sources/summary'),
+  // LinkedIn
+  saveLinkedIn: (data: object) => api.post('/sources/linkedin', data),
+  getLinkedIn: () => api.get('/sources/linkedin'),
+  deleteLinkedIn: () => api.delete('/sources/linkedin'),
+  // Twitter
+  saveTwitter: (handle: string) => api.post('/sources/twitter', { handle }),
+  getTwitter: () => api.get('/sources/twitter'),
+  deleteTwitter: () => api.delete('/sources/twitter'),
+  // Hackathons
+  addHackathon: (data: object) => api.post('/sources/hackathon', data),
+  getHackathons: () => api.get('/sources/hackathon'),
+  updateHackathon: (id: string, data: object) => api.put(`/sources/hackathon/${id}`, data),
+  deleteHackathon: (id: string) => api.delete(`/sources/hackathon/${id}`),
+  // Resume
+  uploadResume: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/sources/resume', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  getResume: () => api.get('/sources/resume'),
+  deleteResume: () => api.delete('/sources/resume'),
+};

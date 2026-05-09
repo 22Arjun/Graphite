@@ -20,6 +20,7 @@ import analysisRoutes from './modules/analysis/analysis.routes.js';
 import scoringRoutes from './modules/scoring/scoring.routes.js';
 import graphRoutes from './modules/graph/graph.routes.js';
 import recommendationRoutes from './modules/recommendation/recommendation.routes.js';
+import sourcesRoutes from './modules/sources/sources.routes.js';
 
 // ============================================================
 // Fastify Application Factory
@@ -134,6 +135,7 @@ export async function buildApp() {
         { name: 'scoring', description: 'Reputation dimension scoring' },
         { name: 'graph', description: 'Collaboration graph' },
         { name: 'recommendation', description: 'Collaborator recommendations' },
+        { name: 'sources', description: 'External reputation sources — LinkedIn, Twitter, Hackathons, Resume' },
       ],
     },
   });
@@ -182,6 +184,7 @@ export async function buildApp() {
   await app.register(scoringRoutes, { prefix: '/api/scoring' });
   await app.register(graphRoutes, { prefix: '/api/graph' });
   await app.register(recommendationRoutes, { prefix: '/api/recommendation' });
+  await app.register(sourcesRoutes, { prefix: '/api/sources' });
 
   return app;
 }

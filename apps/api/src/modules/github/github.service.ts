@@ -110,7 +110,7 @@ export class GitHubService {
       throw new GitHubApiError(
         `${response.status} ${response.statusText}: ${body.slice(0, 200)}`,
         response.status,
-        Object.fromEntries(response.headers.entries())
+        {} as Record<string, string>
       );
     }
 

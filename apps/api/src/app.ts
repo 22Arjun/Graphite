@@ -14,6 +14,10 @@ import authPlugin from './plugins/auth.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import builderRoutes from './modules/builder/builder.routes.js';
 import ingestionRoutes from './modules/ingestion/ingestion.routes.js';
+import analysisRoutes from './modules/analysis/analysis.routes.js';
+import scoringRoutes from './modules/scoring/scoring.routes.js';
+import graphRoutes from './modules/graph/graph.routes.js';
+import recommendationRoutes from './modules/recommendation/recommendation.routes.js';
 
 // ============================================================
 // Fastify Application Factory
@@ -135,6 +139,10 @@ export async function buildApp() {
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(builderRoutes, { prefix: '/api/builder' });
   await app.register(ingestionRoutes, { prefix: '/api/ingestion' });
+  await app.register(analysisRoutes, { prefix: '/api/analysis' });
+  await app.register(scoringRoutes, { prefix: '/api/scoring' });
+  await app.register(graphRoutes, { prefix: '/api/graph' });
+  await app.register(recommendationRoutes, { prefix: '/api/recommendation' });
 
   return app;
 }

@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import type { JobType, JobStatus } from '@prisma/client';
 import { logger } from '../../lib/logger.js';
 
@@ -45,7 +45,7 @@ export class JobQueue {
         jobType: input.jobType,
         status: 'QUEUED',
         progress: 0,
-        payload: input.payload ?? undefined,
+        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : undefined,
       },
     });
 
@@ -75,7 +75,7 @@ export class JobQueue {
       where: { id: jobId },
       data: {
         progress: Math.min(100, Math.max(0, progress)),
-        ...(result ? { result } : {}),
+        ...(result ? { result: result as Prisma.InputJsonValue } : {}),
       },
     });
   }
@@ -90,7 +90,7 @@ export class JobQueue {
         status: 'COMPLETED',
         progress: 100,
         completedAt: new Date(),
-        result: result ?? undefined,
+        result: result ? (result as Prisma.InputJsonValue) : undefined,
       },
     });
 

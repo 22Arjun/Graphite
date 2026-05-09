@@ -2,6 +2,9 @@ import type { PrismaClient } from '@prisma/client';
 import { GitHubService } from '../github/github.service.js';
 import { IngestionRepository } from './ingestion.repository.js';
 import { JobQueue } from './ingestion.queue.js';
+import { AnalysisService } from '../analysis/analysis.service.js';
+import { ScoringService } from '../scoring/scoring.service.js';
+import { GraphService } from '../graph/graph.service.js';
 import { NotFoundError, ConflictError, IngestionError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import type { IngestionSummary } from './ingestion.schema.js';
@@ -20,11 +23,17 @@ export class IngestionService {
   private readonly github: GitHubService;
   private readonly repo: IngestionRepository;
   private readonly queue: JobQueue;
+  private readonly analysis: AnalysisService;
+  private readonly scoring: ScoringService;
+  private readonly graph: GraphService;
 
   constructor(private readonly prisma: PrismaClient) {
     this.github = new GitHubService();
     this.repo = new IngestionRepository(prisma);
     this.queue = new JobQueue(prisma);
+    this.analysis = new AnalysisService(prisma);
+    this.scoring = new ScoringService(prisma);
+    this.graph = new GraphService(prisma);
   }
 
   /**
@@ -204,13 +213,64 @@ export class IngestionService {
       };
 
       await this.queue.completeJob(jobId, summary as unknown as Record<string, unknown>);
-
       logger.info({ jobId, summary }, 'Ingestion pipeline completed');
+
+      // Chain: Analysis → Scoring → Graph (fire-and-forget)
+      this.runPostIngestionPipeline(builderId, jobId).catch((err) => {
+        logger.error({ jobId, builderId, err }, 'Post-ingestion pipeline failed');
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       await this.queue.failJob(jobId, errorMessage);
       logger.error({ jobId, err }, 'Ingestion pipeline failed');
       throw new IngestionError(errorMessage, jobId, 'pipeline');
+    }
+  }
+
+  /**
+   * After ingestion: analyze repos → compute reputation → build graph.
+   * Each step is logged but failures don't stop the chain.
+   */
+  private async runPostIngestionPipeline(builderId: string, parentJobId: string): Promise<void> {
+    logger.info({ builderId, parentJobId }, 'Starting post-ingestion pipeline');
+
+    // Step 1: Analyze all pending repositories
+    const analysisJob = await this.queue.createJob({ builderId, jobType: 'REPO_ANALYSIS' });
+    try {
+      await this.queue.startJob(analysisJob.id);
+      const { analyzed, failed } = await this.analysis.analyzeBuilderRepositories(builderId);
+      await this.queue.completeJob(analysisJob.id, { analyzed, failed });
+      logger.info({ builderId, analyzed, failed }, 'Repo analysis completed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Analysis error';
+      await this.queue.failJob(analysisJob.id, msg);
+      logger.error({ builderId, err }, 'Repo analysis job failed');
+    }
+
+    // Step 2: Compute reputation scores
+    const scoringJob = await this.queue.createJob({ builderId, jobType: 'REPUTATION_COMPUTE' });
+    try {
+      await this.queue.startJob(scoringJob.id);
+      const scores = await this.scoring.computeReputation(builderId);
+      await this.queue.completeJob(scoringJob.id, { dimensions: scores.length });
+      logger.info({ builderId, dimensions: scores.length }, 'Reputation scoring completed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Scoring error';
+      await this.queue.failJob(scoringJob.id, msg);
+      logger.error({ builderId, err }, 'Reputation scoring job failed');
+    }
+
+    // Step 3: Build collaboration graph
+    const graphJob = await this.queue.createJob({ builderId, jobType: 'GRAPH_BUILD' });
+    try {
+      await this.queue.startJob(graphJob.id);
+      await this.graph.buildGraph(builderId);
+      await this.queue.completeJob(graphJob.id, { built: true });
+      logger.info({ builderId }, 'Graph build completed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Graph build error';
+      await this.queue.failJob(graphJob.id, msg);
+      logger.error({ builderId, err }, 'Graph build job failed');
     }
   }
 

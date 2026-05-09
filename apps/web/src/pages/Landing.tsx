@@ -19,6 +19,7 @@ import {
   Lightbulb,
 } from 'lucide-react';
 import NetworkBackground from '@/components/NetworkBackground';
+import { useAuth } from '@/hooks/use-auth';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -31,13 +32,23 @@ const fadeUp = {
 
 const Landing: React.FC = () => {
   const { connected } = useWallet();
+  const { isAuthenticated, login, isLoading } = useAuth();
   const navigate = useNavigate();
 
   React.useEffect(() => {
-    if (connected) {
-      navigate('/dashboard');
-    }
-  }, [connected, navigate]);
+    const handleAuth = async () => {
+      if (isAuthenticated) {
+        navigate('/dashboard');
+      } else if (connected && !isLoading) {
+        try {
+          await login();
+        } catch (err) {
+          console.error("Failed to authenticate:", err);
+        }
+      }
+    };
+    handleAuth();
+  }, [connected, isAuthenticated, isLoading, login, navigate]);
 
   return (
     <div className="relative min-h-screen overflow-hidden">

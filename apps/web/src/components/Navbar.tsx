@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { Menu, X, Hexagon } from 'lucide-react';
+import { Menu, X, Hexagon, Github } from 'lucide-react';
 import { NAV_ITEMS } from '@/lib/constants';
+import { useAuth } from '@/hooks/use-auth';
 
 const Navbar: React.FC = () => {
-  const { connected } = useWallet();
+  const { isAuthenticated, builder, connectGitHub } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const isLanding = location.pathname === '/';
@@ -26,7 +26,7 @@ const Navbar: React.FC = () => {
         </Link>
 
         {/* Desktop Navigation */}
-        {connected && !isLanding && (
+        {isAuthenticated && !isLanding && (
           <div className="hidden md:flex items-center gap-1">
             {NAV_ITEMS.map((item) => {
               const isActive = location.pathname === item.path;
@@ -49,10 +49,19 @@ const Navbar: React.FC = () => {
 
         {/* Right side */}
         <div className="flex items-center gap-3">
+          {isAuthenticated && !builder?.githubConnected && !isLanding && (
+            <button
+              onClick={connectGitHub}
+              className="hidden md:flex items-center gap-1.5 rounded-md border border-border/60 bg-surface-2 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+            >
+              <Github className="h-3.5 w-3.5" />
+              Connect GitHub
+            </button>
+          )}
           <WalletMultiButton />
 
           {/* Mobile menu toggle */}
-          {connected && !isLanding && (
+          {isAuthenticated && !isLanding && (
             <button
               onClick={() => setMobileOpen(!mobileOpen)}
               className="md:hidden p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-surface-2 transition-colors"
@@ -64,7 +73,7 @@ const Navbar: React.FC = () => {
       </div>
 
       {/* Mobile Navigation */}
-      {mobileOpen && connected && !isLanding && (
+      {mobileOpen && isAuthenticated && !isLanding && (
         <div className="md:hidden border-t border-border/50 bg-background/95 backdrop-blur-xl">
           <div className="px-4 py-3 space-y-1">
             {NAV_ITEMS.map((item) => {

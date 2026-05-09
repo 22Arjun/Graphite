@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
 import {
   Hexagon,
   Github,
@@ -9,12 +10,14 @@ import {
   ExternalLink,
   Sparkles,
   Copy,
+  Loader2,
 } from 'lucide-react';
 import { MOCK_BUILDER } from '@/lib/mock-data';
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
 import DimensionBar from '@/components/DimensionBar';
 import SkillTagCloud from '@/components/SkillTagCloud';
+import { api } from '@/lib/api';
 
 const fadeIn = {
   hidden: { opacity: 0, y: 12 },
@@ -25,8 +28,64 @@ const fadeIn = {
   }),
 };
 
+// Map API builder data to mock-compatible shape, falling back to mock for missing fields
+function mapBuilderData(apiData: any) {
+  if (!apiData) return MOCK_BUILDER;
+  return {
+    ...MOCK_BUILDER,
+    display_name: apiData.displayName ?? MOCK_BUILDER.display_name,
+    wallet_address: apiData.walletAddress ?? MOCK_BUILDER.wallet_address,
+    github_username: apiData.githubProfile?.username ?? MOCK_BUILDER.github_username,
+    bio: apiData.bio ?? MOCK_BUILDER.bio,
+    ai_summary: apiData.aiSummary ?? MOCK_BUILDER.ai_summary,
+    updated_at: apiData.updatedAt ?? MOCK_BUILDER.updated_at,
+    skill_tags: apiData.skillTags?.length > 0
+      ? apiData.skillTags.map((t: any) => ({
+          name: t.name,
+          category: t.category?.toLowerCase() ?? 'language',
+          confidence: t.confidence,
+          inferred_from: t.inferredFrom ?? [],
+        }))
+      : MOCK_BUILDER.skill_tags,
+    reputation: {
+      overall_score: apiData.reputation?.overallScore ?? MOCK_BUILDER.reputation.overall_score,
+      signal_count: apiData.reputation?.signalCount ?? MOCK_BUILDER.reputation.signal_count,
+      last_computed: MOCK_BUILDER.reputation.last_computed,
+      dimensions: apiData.reputation?.dimensions?.length > 0
+        ? apiData.reputation.dimensions.map((d: any) => ({
+            dimension: d.dimension?.toLowerCase() ?? d.dimension,
+            score: d.score,
+            confidence: d.confidence,
+            signals: d.signals ?? [],
+            trend: d.trend?.toLowerCase() ?? 'stable',
+          }))
+        : MOCK_BUILDER.reputation.dimensions,
+    },
+    github_stats: {
+      total_repos: apiData.githubStats?.totalRepos ?? MOCK_BUILDER.github_stats.total_repos,
+      total_stars: apiData.githubStats?.totalStars ?? MOCK_BUILDER.github_stats.total_stars,
+      total_forks: apiData.githubStats?.totalForks ?? MOCK_BUILDER.github_stats.total_forks,
+      total_commits: apiData.githubStats?.totalCommits ?? MOCK_BUILDER.github_stats.total_commits,
+      top_languages: apiData.githubStats?.topLanguages?.length > 0
+        ? apiData.githubStats.topLanguages
+        : MOCK_BUILDER.github_stats.top_languages,
+      contribution_streak: apiData.githubStats?.contributionStreak ?? MOCK_BUILDER.github_stats.contribution_streak,
+      active_days_last_year: MOCK_BUILDER.github_stats.active_days_last_year,
+    },
+  };
+}
+
 const Profile: React.FC = () => {
-  const builder = MOCK_BUILDER;
+  const { data: apiData, isLoading } = useQuery({
+    queryKey: ['builderProfile'],
+    queryFn: async () => {
+      const response: any = await api.get('/builder/profile');
+      return response.data;
+    },
+    retry: false,
+  });
+
+  const builder = mapBuilderData(apiData);
   const [copied, setCopied] = React.useState(false);
 
   const copyWallet = () => {
@@ -51,6 +110,12 @@ const Profile: React.FC = () => {
           <p className="text-sm text-muted-foreground">
             Complete reputation intelligence and builder analysis.
           </p>
+          {isLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground/60 mt-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>Syncing live data...</span>
+            </div>
+          )}
         </motion.div>
 
         {/* Profile header card */}

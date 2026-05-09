@@ -1,6 +1,7 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   GitBranch,
   Star,
@@ -11,13 +12,20 @@ import {
   Hexagon,
   Sparkles,
   Clock,
+  Loader2,
+  Github,
+  Play,
 } from 'lucide-react';
-import { MOCK_BUILDER, MOCK_ACTIVITY, MOCK_JOBS } from '@/lib/mock-data';
+import { MOCK_BUILDER, MOCK_ACTIVITY } from '@/lib/mock-data';
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
 import ActivityTimeline from '@/components/ActivityTimeline';
 import SkillTagCloud from '@/components/SkillTagCloud';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
+import { api, ingestionApi } from '@/lib/api';
+import { useAuth } from '@/hooks/use-auth';
+import { useToast } from '@/hooks/use-toast';
 
 const fadeIn = {
   hidden: { opacity: 0, y: 12 },
@@ -28,17 +36,111 @@ const fadeIn = {
   }),
 };
 
+// Map API builder data to mock-compatible shape, falling back to mock for missing fields
+function mapBuilderData(apiData: any) {
+  if (!apiData) return MOCK_BUILDER;
+  return {
+    ...MOCK_BUILDER,
+    display_name: apiData.displayName ?? MOCK_BUILDER.display_name,
+    wallet_address: apiData.walletAddress ?? MOCK_BUILDER.wallet_address,
+    github_username: apiData.githubProfile?.username ?? MOCK_BUILDER.github_username,
+    bio: apiData.bio ?? MOCK_BUILDER.bio,
+    ai_summary: apiData.aiSummary ?? MOCK_BUILDER.ai_summary,
+    skill_tags: apiData.skillTags?.length > 0
+      ? apiData.skillTags.map((t: any) => ({
+          name: t.name,
+          category: t.category?.toLowerCase() ?? 'language',
+          confidence: t.confidence,
+          inferred_from: t.inferredFrom ?? [],
+        }))
+      : MOCK_BUILDER.skill_tags,
+    reputation: {
+      overall_score: apiData.reputation?.overallScore ?? MOCK_BUILDER.reputation.overall_score,
+      signal_count: apiData.reputation?.signalCount ?? MOCK_BUILDER.reputation.signal_count,
+      last_computed: MOCK_BUILDER.reputation.last_computed,
+      dimensions: apiData.reputation?.dimensions?.length > 0
+        ? apiData.reputation.dimensions.map((d: any) => ({
+            dimension: d.dimension?.toLowerCase() ?? d.dimension,
+            score: d.score,
+            confidence: d.confidence,
+            signals: d.signals ?? [],
+            trend: d.trend?.toLowerCase() ?? 'stable',
+          }))
+        : MOCK_BUILDER.reputation.dimensions,
+    },
+    github_stats: {
+      total_repos: apiData.githubStats?.totalRepos ?? MOCK_BUILDER.github_stats.total_repos,
+      total_stars: apiData.githubStats?.totalStars ?? MOCK_BUILDER.github_stats.total_stars,
+      total_forks: apiData.githubStats?.totalForks ?? MOCK_BUILDER.github_stats.total_forks,
+      total_commits: apiData.githubStats?.totalCommits ?? MOCK_BUILDER.github_stats.total_commits,
+      top_languages: apiData.githubStats?.topLanguages?.length > 0
+        ? apiData.githubStats.topLanguages
+        : MOCK_BUILDER.github_stats.top_languages,
+      contribution_streak: apiData.githubStats?.contributionStreak ?? MOCK_BUILDER.github_stats.contribution_streak,
+      active_days_last_year: MOCK_BUILDER.github_stats.active_days_last_year,
+    },
+  };
+}
+
 const Dashboard: React.FC = () => {
-  const builder = MOCK_BUILDER;
+  const { builder: authBuilder, connectGitHub } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+
+  // Show GitHub connected toast after OAuth redirect
+  React.useEffect(() => {
+    if (searchParams.get('github') === 'connected') {
+      toast({ title: 'GitHub connected', description: 'Your GitHub account has been linked.' });
+    }
+  }, []);
+
+  const { data: apiData, isLoading } = useQuery({
+    queryKey: ['builderProfile'],
+    queryFn: async () => {
+      const response: any = await api.get('/builder/profile');
+      return response.data;
+    },
+    retry: false,
+  });
+
+  // Poll jobs while any are active
+  const { data: jobsData } = useQuery({
+    queryKey: ['ingestionJobs'],
+    queryFn: async () => {
+      const response: any = await ingestionApi.getJobs();
+      return response.data as any[];
+    },
+    refetchInterval: (data: any) => {
+      const jobs: any[] = data?.state?.data ?? [];
+      const hasActive = jobs.some((j: any) => j.status === 'QUEUED' || j.status === 'PROCESSING');
+      return hasActive ? 3000 : false;
+    },
+    retry: false,
+  });
+
+  const triggerIngestion = useMutation({
+    mutationFn: () => ingestionApi.trigger(),
+    onSuccess: () => {
+      toast({ title: 'Analysis started', description: 'GitHub ingestion pipeline has been triggered.' });
+      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] });
+    },
+    onError: () => {
+      toast({ title: 'Failed to start analysis', variant: 'destructive' });
+    },
+  });
+
+  const builder = mapBuilderData(apiData);
 
   const stats = [
-    { label: 'Repositories', value: builder.github_stats.total_repos, icon: GitBranch, change: '+3' },
-    { label: 'Total Stars', value: builder.github_stats.total_stars, icon: Star, change: '+28' },
-    { label: 'Total Forks', value: builder.github_stats.total_forks, icon: GitFork, change: '+12' },
-    { label: 'Total Commits', value: builder.github_stats.total_commits.toLocaleString(), icon: Code2, change: '+142' },
+    { label: 'Repositories', value: builder.github_stats.total_repos, icon: GitBranch, change: '' },
+    { label: 'Total Stars', value: builder.github_stats.total_stars, icon: Star, change: '' },
+    { label: 'Total Forks', value: builder.github_stats.total_forks, icon: GitFork, change: '' },
+    { label: 'Total Commits', value: builder.github_stats.total_commits.toLocaleString(), icon: Code2, change: '' },
   ];
 
-  const activeJobs = MOCK_JOBS.filter((j) => j.status === 'processing' || j.status === 'queued');
+  const activeJobs = (jobsData ?? []).filter((j: any) => j.status === 'PROCESSING' || j.status === 'QUEUED');
+  const githubConnected = authBuilder?.githubConnected ?? apiData?.githubProfile != null;
 
   return (
     <div className="mx-auto max-w-7xl px-4 lg:px-8 py-8">
@@ -58,6 +160,28 @@ const Dashboard: React.FC = () => {
           </p>
         </motion.div>
 
+        {/* Loading indicator (subtle, doesn't change layout) */}
+        {isLoading && (
+          <motion.div custom={0.5} variants={fadeIn} className="mb-4 flex items-center gap-2 text-xs text-muted-foreground/60">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Syncing live data...</span>
+          </motion.div>
+        )}
+
+        {/* GitHub connect banner (shown if GitHub not connected) */}
+        {!githubConnected && (
+          <motion.div custom={1} variants={fadeIn} className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">Connect GitHub to unlock reputation analysis</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Link your GitHub account to ingest repositories and generate intelligence.</p>
+            </div>
+            <Button size="sm" variant="outline" className="shrink-0" onClick={connectGitHub}>
+              <Github className="h-4 w-4 mr-2" />
+              Connect GitHub
+            </Button>
+          </motion.div>
+        )}
+
         {/* Active jobs banner */}
         {activeJobs.length > 0 && (
           <motion.div custom={1} variants={fadeIn} className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
@@ -65,10 +189,10 @@ const Dashboard: React.FC = () => {
               <Clock className="h-4 w-4 text-primary animate-pulse" />
               <span className="text-sm font-medium text-foreground">Analysis in progress</span>
             </div>
-            {activeJobs.map((job) => (
+            {activeJobs.map((job: any) => (
               <div key={job.id} className="mb-2 last:mb-0">
                 <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                  <span className="capitalize">{job.type.replace(/_/g, ' ')}</span>
+                  <span className="capitalize">{job.jobType?.replace(/_/g, ' ')}</span>
                   <span className="font-mono">{job.progress}%</span>
                 </div>
                 <Progress value={job.progress} className="h-1.5" />
@@ -193,10 +317,25 @@ const Dashboard: React.FC = () => {
             <div className="graphite-card p-5">
               <h3 className="text-sm font-semibold text-foreground mb-3">Quick Actions</h3>
               <div className="space-y-2">
+                {githubConnected && (
+                  <button
+                    onClick={() => triggerIngestion.mutate()}
+                    disabled={triggerIngestion.isPending || activeJobs.length > 0}
+                    className="w-full flex items-center justify-between rounded-md bg-primary/10 border border-primary/20 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Play className="h-3 w-3" />
+                      {triggerIngestion.isPending ? 'Starting...' : activeJobs.length > 0 ? 'Analysis running...' : 'Sync & Analyze GitHub'}
+                    </span>
+                    {triggerIngestion.isPending || activeJobs.length > 0
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <ArrowRight className="h-3 w-3" />}
+                  </button>
+                )}
                 {[
-                  { label: 'View full profile', path: '/profile', icon: '→' },
-                  { label: 'Analyze repositories', path: '/repositories', icon: '→' },
-                  { label: 'Explore collaboration graph', path: '/graph', icon: '→' },
+                  { label: 'View full profile', path: '/profile' },
+                  { label: 'Browse repositories', path: '/repositories' },
+                  { label: 'Explore collaboration graph', path: '/graph' },
                 ].map((action) => (
                   <Link
                     key={action.path}

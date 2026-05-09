@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
 import {
   Hexagon,
   Users,
   ArrowRight,
   Sparkles,
   Target,
-  Star,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
 import { MOCK_GRAPH, MOCK_RECOMMENDATIONS } from '@/lib/mock-data';
 import GraphCanvas from '@/components/GraphCanvas';
+import { graphApi, recommendationApi } from '@/lib/api';
 
 const fadeIn = {
   hidden: { opacity: 0, y: 12 },
@@ -22,8 +23,58 @@ const fadeIn = {
   }),
 };
 
+// Map API graph response to the shape GraphCanvas expects
+function mapGraphData(apiGraph: any) {
+  if (!apiGraph) return MOCK_GRAPH;
+  return {
+    nodes: apiGraph.nodes ?? [],
+    edges: apiGraph.edges ?? [],
+    clusters: MOCK_GRAPH.clusters, // clusters are computed client-side for now
+  };
+}
+
+// Map API recommendation to the shape the recommendations panel expects
+function mapRecommendation(rec: any) {
+  return {
+    builder: {
+      id: rec.builderId,
+      display_name: rec.displayName ?? rec.githubUsername ?? 'Builder',
+      github_username: rec.githubUsername ?? '',
+      ai_summary: `${rec.reasons?.[0] ?? ''} ${rec.reasons?.[1] ?? ''}`.trim(),
+      reputation: { overall_score: rec.overallScore ?? 0 },
+    },
+    match_score: rec.matchScore,
+    reasons: rec.reasons ?? [],
+    complementary_skills: rec.complementarySkills ?? [],
+    shared_interests: rec.sharedDomains ?? [],
+  };
+}
+
 const Graph: React.FC = () => {
   const [expandedRec, setExpandedRec] = useState<string | null>(null);
+
+  const { data: graphApiData } = useQuery({
+    queryKey: ['builderGraph'],
+    queryFn: async () => {
+      const res: any = await graphApi.getBuilderGraph();
+      return res.data;
+    },
+    retry: false,
+  });
+
+  const { data: recsApiData } = useQuery({
+    queryKey: ['collaboratorRecs'],
+    queryFn: async () => {
+      const res: any = await recommendationApi.getCollaborators(5);
+      return res.data as any[];
+    },
+    retry: false,
+  });
+
+  const graph = mapGraphData(graphApiData);
+  const recommendations = recsApiData && recsApiData.length > 0
+    ? recsApiData.map(mapRecommendation)
+    : MOCK_RECOMMENDATIONS;
 
   return (
     <div className="mx-auto max-w-7xl px-4 lg:px-8 py-8">
@@ -46,9 +97,9 @@ const Graph: React.FC = () => {
         {/* Graph stats */}
         <motion.div custom={1} variants={fadeIn} className="grid grid-cols-3 gap-3 mb-6">
           {[
-            { label: 'Nodes', value: MOCK_GRAPH.nodes.length, icon: Hexagon },
-            { label: 'Connections', value: MOCK_GRAPH.edges.length, icon: ArrowRight },
-            { label: 'Clusters', value: MOCK_GRAPH.clusters.length, icon: Users },
+            { label: 'Nodes', value: graph.nodes.length, icon: Hexagon },
+            { label: 'Connections', value: graph.edges.length, icon: ArrowRight },
+            { label: 'Clusters', value: graph.clusters.length, icon: Users },
           ].map((stat) => (
             <div key={stat.label} className="graphite-card p-4">
               <div className="flex items-center gap-2 mb-1">
@@ -72,7 +123,7 @@ const Graph: React.FC = () => {
               </div>
               <div className="w-full overflow-x-auto">
                 <div className="min-w-[600px]">
-                  <GraphCanvas graph={MOCK_GRAPH} width={680} height={480} />
+                  <GraphCanvas graph={graph} width={680} height={480} />
                 </div>
               </div>
             </div>
@@ -81,7 +132,7 @@ const Graph: React.FC = () => {
             <div className="graphite-card p-5 mt-4">
               <h3 className="text-sm font-semibold text-foreground mb-3">Detected Clusters</h3>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {MOCK_GRAPH.clusters.map((cluster) => (
+                {graph.clusters.map((cluster) => (
                   <div
                     key={cluster.id}
                     className="rounded-lg bg-surface-2 border border-border/50 p-3"
@@ -93,7 +144,7 @@ const Graph: React.FC = () => {
                     </p>
                     <div className="flex mt-2 -space-x-1.5">
                       {cluster.node_ids.slice(0, 4).map((nid) => {
-                        const node = MOCK_GRAPH.nodes.find((n) => n.id === nid);
+                        const node = graph.nodes.find((n: any) => n.id === nid);
                         return (
                           <div
                             key={nid}
@@ -121,7 +172,7 @@ const Graph: React.FC = () => {
               Builders with complementary skills and shared interests.
             </p>
 
-            {MOCK_RECOMMENDATIONS.map((rec) => {
+            {recommendations.map((rec) => {
               const isExpanded = expandedRec === rec.builder.id;
               return (
                 <div key={rec.builder.id} className="graphite-card overflow-hidden">

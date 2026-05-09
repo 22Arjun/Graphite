@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Hexagon, Search, Filter, RefreshCw, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Hexagon, Search, Filter, RefreshCw, CheckCircle2, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import { MOCK_REPOSITORIES } from '@/lib/mock-data';
 import RepoCard from '@/components/RepoCard';
 import type { AnalysisStatus } from '@/lib/types';
+import { api } from '@/lib/api';
 
 const fadeIn = {
   hidden: { opacity: 0, y: 12 },
@@ -21,11 +23,72 @@ const statusFilters: { label: string; value: AnalysisStatus | 'all' }[] = [
   { label: 'Pending', value: 'pending' },
 ];
 
+// Map API repository data to mock-compatible shape
+function mapRepoData(apiRepo: any) {
+  return {
+    id: apiRepo.id,
+    github_id: apiRepo.githubId ?? 0,
+    name: apiRepo.name,
+    full_name: apiRepo.fullName ?? apiRepo.name,
+    description: apiRepo.description ?? null,
+    url: apiRepo.url ?? '#',
+    homepage: apiRepo.homepage ?? null,
+    stars: apiRepo.stars ?? 0,
+    forks: apiRepo.forks ?? 0,
+    watchers: apiRepo.watchers ?? 0,
+    language: apiRepo.primaryLanguage ?? null,
+    // Convert API languages array to object
+    languages: Array.isArray(apiRepo.languages)
+      ? apiRepo.languages.reduce((acc: any, l: any) => {
+          acc[l.language] = l.bytes;
+          return acc;
+        }, {})
+      : {},
+    topics: apiRepo.topics ?? [],
+    is_fork: apiRepo.isFork ?? false,
+    created_at: apiRepo.createdAt ?? '',
+    updated_at: apiRepo.updatedAt ?? '',
+    pushed_at: apiRepo.pushedAt ?? '',
+    analysis_status: apiRepo.analysisStatus?.toLowerCase() ?? 'pending',
+    analysis: apiRepo.analysis
+      ? {
+          id: apiRepo.analysis.id ?? '',
+          repo_id: apiRepo.id,
+          architecture_complexity: apiRepo.analysis.architectureComplexity ?? 0,
+          code_quality_signals: apiRepo.analysis.codeQualitySignals ?? 0,
+          execution_maturity: apiRepo.analysis.executionMaturity ?? 0,
+          originality_score: apiRepo.analysis.originalityScore ?? 0,
+          inferred_skills: apiRepo.analysis.inferredSkills ?? [],
+          probable_domains: apiRepo.analysis.probableDomains ?? [],
+          builder_summary: apiRepo.analysis.builderSummary ?? '',
+          key_patterns: apiRepo.analysis.keyPatterns ?? [],
+          deployment_detected: apiRepo.analysis.deploymentDetected ?? false,
+          test_coverage_signals: apiRepo.analysis.testCoverageSignals ?? 'none',
+          analyzed_at: apiRepo.analysis.analyzedAt ?? '',
+        }
+      : undefined,
+  };
+}
+
 const Repositories: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<AnalysisStatus | 'all'>('all');
 
-  const repos = MOCK_REPOSITORIES.filter((repo) => {
+  const { data: apiRepos, isLoading } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: async () => {
+      const response: any = await api.get('/builder/repositories?limit=100');
+      return response.data ?? [];
+    },
+    retry: false,
+  });
+
+  // Use API data if available, otherwise fall back to mock data
+  const allRepos = apiRepos && Array.isArray(apiRepos) && apiRepos.length > 0
+    ? apiRepos.map(mapRepoData)
+    : MOCK_REPOSITORIES;
+
+  const repos = allRepos.filter((repo) => {
     const matchesSearch =
       !search ||
       repo.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -35,10 +98,10 @@ const Repositories: React.FC = () => {
   });
 
   const statusCounts = {
-    all: MOCK_REPOSITORIES.length,
-    completed: MOCK_REPOSITORIES.filter((r) => r.analysis_status === 'completed').length,
-    analyzing: MOCK_REPOSITORIES.filter((r) => r.analysis_status === 'analyzing').length,
-    pending: MOCK_REPOSITORIES.filter((r) => r.analysis_status === 'pending').length,
+    all: allRepos.length,
+    completed: allRepos.filter((r) => r.analysis_status === 'completed').length,
+    analyzing: allRepos.filter((r) => r.analysis_status === 'analyzing').length,
+    pending: allRepos.filter((r) => r.analysis_status === 'pending').length,
   };
 
   return (
@@ -57,12 +120,18 @@ const Repositories: React.FC = () => {
           <p className="text-sm text-muted-foreground">
             GitHub repositories ingested for AI analysis. Each repo contributes to your reputation profile.
           </p>
+          {isLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground/60 mt-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>Syncing live data...</span>
+            </div>
+          )}
         </motion.div>
 
         {/* Pipeline status */}
         <motion.div custom={1} variants={fadeIn} className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           {[
-            { label: 'Total Repos', value: MOCK_REPOSITORIES.length, icon: Hexagon, color: 'text-foreground' },
+            { label: 'Total Repos', value: allRepos.length, icon: Hexagon, color: 'text-foreground' },
             { label: 'Analyzed', value: statusCounts.completed, icon: CheckCircle2, color: 'text-primary' },
             { label: 'In Progress', value: statusCounts.analyzing, icon: RefreshCw, color: 'text-node-secondary' },
             { label: 'Pending', value: statusCounts.pending, icon: Clock, color: 'text-muted-foreground' },

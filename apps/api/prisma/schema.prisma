@@ -1,0 +1,352 @@
+// ============================================================
+// Graphite — Database Schema
+// Supabase PostgreSQL via Prisma ORM
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -------------------------------------------------------
+// Enums
+// -------------------------------------------------------
+
+enum AnalysisStatus {
+  PENDING
+  INGESTING
+  ANALYZING
+  COMPLETED
+  FAILED
+
+  @@map("analysis_status")
+}
+
+enum JobType {
+  GITHUB_INGEST
+  REPO_ANALYSIS
+  REPUTATION_COMPUTE
+  GRAPH_BUILD
+
+  @@map("job_type")
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+
+  @@map("job_status")
+}
+
+enum ReputationDimension {
+  TECHNICAL_DEPTH
+  EXECUTION_ABILITY
+  COLLABORATION_QUALITY
+  CONSISTENCY
+  INNOVATION
+
+  @@map("reputation_dimension")
+}
+
+enum TrendDirection {
+  RISING
+  STABLE
+  DECLINING
+
+  @@map("trend_direction")
+}
+
+enum SkillCategory {
+  LANGUAGE
+  FRAMEWORK
+  DOMAIN
+  PATTERN
+  TOOL
+
+  @@map("skill_category")
+}
+
+// -------------------------------------------------------
+// Core Models
+// -------------------------------------------------------
+
+/// Root identity: wallet-anchored builder profile
+model Builder {
+  id            String   @id @default(uuid()) @db.Uuid
+  walletAddress String   @unique @map("wallet_address")
+  displayName   String?  @map("display_name")
+  bio           String?
+  aiSummary     String?  @map("ai_summary") @db.Text
+  avatarUrl     String?  @map("avatar_url")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  githubProfile    GitHubProfile?
+  repositories     Repository[]
+  reputationScores ReputationScore[]
+  skillTags        SkillTag[]
+  ingestionJobs    IngestionJob[]
+
+  // Graph edges where this builder is the source
+  outgoingEdges CollaborationEdge[] @relation("edge_source")
+  // Graph edges where this builder is the target
+  incomingEdges CollaborationEdge[] @relation("edge_target")
+
+  @@index([walletAddress])
+  @@map("builders")
+}
+
+/// Linked GitHub identity with OAuth tokens
+model GitHubProfile {
+  id             String    @id @default(uuid()) @db.Uuid
+  builderId      String    @unique @map("builder_id") @db.Uuid
+  githubId       Int       @unique @map("github_id")
+  username       String    @unique
+  avatarUrl      String?   @map("avatar_url")
+  name           String?
+  bio            String?
+  company        String?
+  location       String?
+  publicRepos    Int       @default(0) @map("public_repos")
+  followers      Int       @default(0)
+  following      Int       @default(0)
+  accessToken    String    @map("access_token")
+  refreshToken   String?   @map("refresh_token")
+  tokenExpiresAt DateTime? @map("token_expires_at")
+  lastSyncedAt   DateTime? @map("last_synced_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@index([username])
+  @@map("github_profiles")
+}
+
+/// Ingested GitHub repository
+model Repository {
+  id              String         @id @default(uuid()) @db.Uuid
+  builderId       String         @map("builder_id") @db.Uuid
+  githubId        Int            @unique @map("github_id")
+  name            String
+  fullName        String         @map("full_name")
+  description     String?        @db.Text
+  url             String
+  homepage        String?
+  isPrivate       Boolean        @default(false) @map("is_private")
+  isFork          Boolean        @default(false) @map("is_fork")
+  isArchived      Boolean        @default(false) @map("is_archived")
+  stars           Int            @default(0)
+  forks           Int            @default(0)
+  watchers        Int            @default(0)
+  openIssues      Int            @default(0) @map("open_issues")
+  size            Int            @default(0)
+  defaultBranch   String         @default("main") @map("default_branch")
+  primaryLanguage String?        @map("primary_language")
+  topics          String[]       @default([])
+  licenseName     String?        @map("license_name")
+  hasDeployment   Boolean        @default(false) @map("has_deployment")
+  commitCount     Int            @default(0) @map("commit_count")
+  pushedAt        DateTime?      @map("pushed_at")
+  repoCreatedAt   DateTime?      @map("repo_created_at")
+  repoUpdatedAt   DateTime?      @map("repo_updated_at")
+  analysisStatus  AnalysisStatus @default(PENDING) @map("analysis_status")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  builder      Builder              @relation(fields: [builderId], references: [id], onDelete: Cascade)
+  languages    RepositoryLanguage[]
+  commits      Commit[]
+  contributors Contributor[]
+  analysis     RepositoryAnalysis?
+
+  @@unique([builderId, githubId])
+  @@index([builderId])
+  @@index([analysisStatus])
+  @@map("repositories")
+}
+
+/// Language breakdown per repository
+model RepositoryLanguage {
+  id           String @id @default(uuid()) @db.Uuid
+  repositoryId String @map("repository_id") @db.Uuid
+  language     String
+  bytes        Int
+  percentage   Float
+  color        String @default("#6e7681")
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, language])
+  @@map("repository_languages")
+}
+
+/// Sampled commit data for contribution pattern analysis
+model Commit {
+  id           String   @id @default(uuid()) @db.Uuid
+  repositoryId String   @map("repository_id") @db.Uuid
+  sha          String
+  message      String   @db.Text
+  authorLogin  String?  @map("author_login")
+  authorEmail  String?  @map("author_email")
+  additions    Int      @default(0)
+  deletions    Int      @default(0)
+  committedAt  DateTime @map("committed_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, sha])
+  @@index([repositoryId, committedAt])
+  @@index([authorLogin])
+  @@map("commits")
+}
+
+/// Repository contributors with contribution counts
+model Contributor {
+  id            String @id @default(uuid()) @db.Uuid
+  repositoryId  String @map("repository_id") @db.Uuid
+  githubLogin   String @map("github_login")
+  githubId      Int    @map("github_id")
+  avatarUrl     String? @map("avatar_url")
+  contributions Int    @default(0)
+  isOwner       Boolean @default(false) @map("is_owner")
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, githubId])
+  @@index([githubLogin])
+  @@map("contributors")
+}
+
+// -------------------------------------------------------
+// AI Analysis Models
+// -------------------------------------------------------
+
+/// AI-generated analysis of a single repository
+model RepositoryAnalysis {
+  id                     String   @id @default(uuid()) @db.Uuid
+  repositoryId           String   @unique @map("repository_id") @db.Uuid
+  architectureComplexity Int      @map("architecture_complexity") // 1-10
+  codeQualitySignals     Int      @map("code_quality_signals") // 1-10
+  executionMaturity      Int      @map("execution_maturity") // 1-10
+  originalityScore       Int      @map("originality_score") // 1-10
+  inferredSkills         String[] @map("inferred_skills")
+  probableDomains        String[] @map("probable_domains")
+  builderSummary         String   @map("builder_summary") @db.Text
+  keyPatterns            String[] @map("key_patterns")
+  deploymentDetected     Boolean  @default(false) @map("deployment_detected")
+  testCoverageSignals    String   @default("none") @map("test_coverage_signals")
+  rawAiResponse          Json?    @map("raw_ai_response")
+  modelVersion           String   @default("v1") @map("model_version")
+  analyzedAt             DateTime @default(now()) @map("analyzed_at")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@map("repository_analyses")
+}
+
+// -------------------------------------------------------
+// Reputation Models
+// -------------------------------------------------------
+
+/// Scored reputation dimension for a builder
+model ReputationScore {
+  id         String              @id @default(uuid()) @db.Uuid
+  builderId  String              @map("builder_id") @db.Uuid
+  dimension  ReputationDimension
+  score      Float               // 0-100
+  confidence Float               // 0-1
+  signals    String[]
+  trend      TrendDirection      @default(STABLE)
+  computedAt DateTime            @default(now()) @map("computed_at")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@unique([builderId, dimension])
+  @@index([builderId])
+  @@map("reputation_scores")
+}
+
+/// AI-inferred skill tag for a builder
+model SkillTag {
+  id           String        @id @default(uuid()) @db.Uuid
+  builderId    String        @map("builder_id") @db.Uuid
+  name         String
+  category     SkillCategory
+  confidence   Float // 0-1
+  inferredFrom String[]      @map("inferred_from")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@unique([builderId, name])
+  @@index([builderId])
+  @@map("skill_tags")
+}
+
+// -------------------------------------------------------
+// Collaboration Graph
+// -------------------------------------------------------
+
+/// Weighted edge in the collaboration graph
+model CollaborationEdge {
+  id         String   @id @default(uuid()) @db.Uuid
+  sourceBuilderId String @map("source_builder_id") @db.Uuid
+  targetBuilderId String @map("target_builder_id") @db.Uuid
+  weight     Float    @default(0)
+  edgeType   String   @map("edge_type") // collaborated, contributed, forked, skill_match
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  sourceBuilder Builder @relation("edge_source", fields: [sourceBuilderId], references: [id], onDelete: Cascade)
+  targetBuilder Builder @relation("edge_target", fields: [targetBuilderId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceBuilderId, targetBuilderId, edgeType])
+  @@index([sourceBuilderId])
+  @@index([targetBuilderId])
+  @@map("collaboration_edges")
+}
+
+// -------------------------------------------------------
+// Job / Queue System
+// -------------------------------------------------------
+
+/// Async processing job tracker
+model IngestionJob {
+  id          String    @id @default(uuid()) @db.Uuid
+  builderId   String    @map("builder_id") @db.Uuid
+  jobType     JobType   @map("job_type")
+  status      JobStatus @default(QUEUED)
+  progress    Int       @default(0) // 0-100
+  payload     Json?     // Input parameters
+  result      Json?     // Output / metadata
+  error       String?   @db.Text
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3) @map("max_attempts")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
+
+  @@index([builderId])
+  @@index([status, jobType])
+  @@index([createdAt])
+  @@map("ingestion_jobs")
+}

@@ -88,6 +88,15 @@ enum SkillCategory {
   @@map("skill_category")
 }
 
+enum FormAnalysisStatus {
+  PENDING
+  ANALYZING
+  COMPLETED
+  FAILED
+
+  @@map("form_analysis_status")
+}
+
 // -------------------------------------------------------
 // Core Models
 // -------------------------------------------------------
@@ -119,6 +128,8 @@ model Builder {
   outgoingEdges CollaborationEdge[] @relation("edge_source")
   // Graph edges where this builder is the target
   incomingEdges CollaborationEdge[] @relation("edge_target")
+
+  profileRequests ProfileRequest[]
 
   @@index([walletAddress])
   @@map("builders")
@@ -450,4 +461,54 @@ model ResumeData {
   builder Builder @relation(fields: [builderId], references: [id], onDelete: Cascade)
 
   @@map("resume_data")
+}
+
+// -------------------------------------------------------
+// Profile Request Forms (Outreach)
+// -------------------------------------------------------
+
+/// A shareable form link created by a builder to collect profile data from others
+model ProfileRequest {
+  id             String    @id @default(uuid()) @db.Uuid
+  builderId      String    @map("builder_id") @db.Uuid
+  token          String    @unique
+  title          String?
+  description    String?   @db.Text
+  isActive       Boolean   @default(true) @map("is_active")
+  expiresAt      DateTime? @map("expires_at")
+  requiredFields String[]  @default([]) @map("required_fields")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  builder     Builder          @relation(fields: [builderId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
+
+  @@index([builderId])
+  @@map("profile_requests")
+}
+
+/// A profile submitted by a recipient in response to a ProfileRequest
+model FormSubmission {
+  id             String             @id @default(uuid()) @db.Uuid
+  requestId      String             @map("request_id") @db.Uuid
+  fullName       String?            @map("full_name")
+  email          String?
+  linkedInUrl    String?            @map("linkedin_url")
+  twitterHandle  String?            @map("twitter_handle")
+  githubUsername String?            @map("github_username")
+  projectLinks   Json               @default("[]") @map("project_links")
+  hackathons     Json               @default("[]")
+  extraLinks     Json               @default("[]") @map("extra_links")
+  resumeUrl      String?            @map("resume_url")
+  resumeText     String?            @map("resume_text") @db.Text
+  analysisStatus FormAnalysisStatus @default(PENDING) @map("analysis_status")
+  analysisResult Json?              @map("analysis_result")
+  submittedAt    DateTime           @default(now()) @map("submitted_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  request ProfileRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("form_submissions")
 }

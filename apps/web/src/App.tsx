@@ -13,6 +13,9 @@ import Profile from '@/pages/Profile';
 import Repositories from '@/pages/Repositories';
 import Graph from '@/pages/Graph';
 import Settings from '@/pages/Settings';
+import Outreach from '@/pages/Outreach';
+import OutreachDetail from '@/pages/OutreachDetail';
+import FormPage from '@/pages/FormPage';
 import NotFound from '@/pages/NotFound';
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
 
@@ -43,6 +46,9 @@ const App = () => {
                 <Route path="/repositories" element={<ProtectedRoute><Repositories /></ProtectedRoute>} />
                 <Route path="/graph" element={<ProtectedRoute><Graph /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+                <Route path="/outreach" element={<ProtectedRoute><Outreach /></ProtectedRoute>} />
+                <Route path="/outreach/:formId" element={<ProtectedRoute><OutreachDetail /></ProtectedRoute>} />
+                <Route path="/form/:token" element={<FormPage />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </AppShell>

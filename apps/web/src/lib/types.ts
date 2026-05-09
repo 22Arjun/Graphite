@@ -170,6 +170,73 @@ export interface ActivityEvent {
   metadata?: Record<string, unknown>;
 }
 
+// --- Profile Request Forms (Outreach) ---
+export type FormAnalysisStatus = 'PENDING' | 'ANALYZING' | 'COMPLETED' | 'FAILED';
+
+export interface ProfileRequest {
+  id: string;
+  token: string;
+  title: string | null;
+  description: string | null;
+  isActive: boolean;
+  expiresAt: string | null;
+  requiredFields: string[];
+  createdAt: string;
+  updatedAt: string;
+  submissionCount?: number;
+  _count?: { submissions: number };
+}
+
+export interface FormSubmissionSummary {
+  id: string;
+  requestId: string;
+  fullName: string | null;
+  email: string | null;
+  githubUsername: string | null;
+  twitterHandle: string | null;
+  linkedInUrl: string | null;
+  resumeUrl: string | null;
+  analysisStatus: FormAnalysisStatus;
+  submittedAt: string;
+}
+
+export interface FormSubmission extends FormSubmissionSummary {
+  projectLinks: { url: string; title?: string }[];
+  hackathons: { name: string; year: number; placement?: string; prize?: string; projectUrl?: string }[];
+  extraLinks: { url: string; label?: string }[];
+  resumeText: string | null;
+  analysisResult: FormAnalysisResult | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FormAnalysisResult {
+  overallScore: number;
+  dimensions: {
+    technicalDepth: { score: number; reasoning: string };
+    executionAbility: { score: number; reasoning: string };
+    consistency: { score: number; reasoning: string };
+    collaborationQuality: { score: number; reasoning: string };
+    innovation: { score: number; reasoning: string };
+  };
+  skills: string[];
+  techStack: string[];
+  summary: string;
+  strengths: string[];
+  growthAreas: string[];
+  experienceLevel: string;
+  githubInsights: Record<string, unknown> | null;
+}
+
+export interface PublicFormConfig {
+  id: string;
+  token: string;
+  title: string | null;
+  description: string | null;
+  isActive: boolean;
+  requiredFields: string[];
+}
+
 // --- Analysis Job ---
 export interface AnalysisJob {
   id: string;

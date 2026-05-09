@@ -21,6 +21,7 @@ import scoringRoutes from './modules/scoring/scoring.routes.js';
 import graphRoutes from './modules/graph/graph.routes.js';
 import recommendationRoutes from './modules/recommendation/recommendation.routes.js';
 import sourcesRoutes from './modules/sources/sources.routes.js';
+import formsRoutes from './modules/forms/forms.routes.js';
 
 // ============================================================
 // Fastify Application Factory
@@ -136,6 +137,7 @@ export async function buildApp() {
         { name: 'graph', description: 'Collaboration graph' },
         { name: 'recommendation', description: 'Collaborator recommendations' },
         { name: 'sources', description: 'External reputation sources — LinkedIn, Twitter, Hackathons, Resume' },
+        { name: 'forms', description: 'Profile Request Forms — shareable links, submissions, AI analysis' },
       ],
     },
   });
@@ -185,6 +187,7 @@ export async function buildApp() {
   await app.register(graphRoutes, { prefix: '/api/graph' });
   await app.register(recommendationRoutes, { prefix: '/api/recommendation' });
   await app.register(sourcesRoutes, { prefix: '/api/sources' });
+  await app.register(formsRoutes, { prefix: '/api/forms' });
 
   return app;
 }

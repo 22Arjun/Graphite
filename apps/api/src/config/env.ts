@@ -29,6 +29,22 @@ const envSchema = z.object({
   // Optional: Twitter API v2 bearer token for public profile fetching
   TWITTER_BEARER_TOKEN: z.string().optional(),
 
+  // SMTP — email delivery (Nodemailer)
+  SMTP_HOST: z.string().default('smtp.gmail.com'),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().min(1, 'SMTP_USER is required'),
+  SMTP_PASS: z.string().min(1, 'SMTP_PASS is required'),
+  FROM_EMAIL: z.string().email().default('noreply@graphite.app'),
+  FROM_NAME: z.string().default('Graphite'),
+
+  // Cloudinary — resume file storage
+  CLOUDINARY_CLOUD_NAME: z.string().min(1, 'CLOUDINARY_CLOUD_NAME is required'),
+  CLOUDINARY_API_KEY: z.string().min(1, 'CLOUDINARY_API_KEY is required'),
+  CLOUDINARY_API_SECRET: z.string().min(1, 'CLOUDINARY_API_SECRET is required'),
+
+  // Base URL used to construct public form links in outbound emails
+  APP_BASE_URL: z.string().url().default('http://localhost:5173'),
+
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 
   RATE_LIMIT_MAX: z.coerce.number().default(100),

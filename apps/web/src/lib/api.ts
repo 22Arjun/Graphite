@@ -103,3 +103,20 @@ export const sourcesApi = {
   getResume: () => api.get('/sources/resume'),
   deleteResume: () => api.delete('/sources/resume'),
 };
+
+export const formsApi = {
+  create: (data: object) => api.post('/forms', data),
+  list: () => api.get('/forms'),
+  get: (id: string) => api.get(`/forms/${id}`),
+  update: (id: string, data: object) => api.patch(`/forms/${id}`, data),
+  remove: (id: string) => api.delete(`/forms/${id}`),
+  sendEmail: (id: string, data: object) => api.post(`/forms/${id}/send-email`, data),
+  listSubmissions: (id: string) => api.get(`/forms/${id}/submissions`),
+  getSubmission: (submissionId: string) => api.get(`/forms/submissions/${submissionId}`),
+  reanalyze: (submissionId: string) => api.post(`/forms/submissions/${submissionId}/reanalyze`),
+  getPublicForm: (token: string) => api.get(`/forms/public/${token}`),
+  submitForm: (token: string, formData: FormData) =>
+    api.post(`/forms/public/${token}/submit`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+};

@@ -43,44 +43,45 @@ export class AnalysisService {
     try {
       const result = await this.runAIAnalysis(repo);
 
-      // Persist analysis
-      await this.prisma.repositoryAnalysis.upsert({
-        where: { repositoryId },
-        create: {
-          repositoryId,
-          architectureComplexity: result.architectureComplexity,
-          codeQualitySignals: result.codeQualitySignals,
-          executionMaturity: result.executionMaturity,
-          originalityScore: result.originalityScore,
-          inferredSkills: result.inferredSkills,
-          probableDomains: result.probableDomains,
-          builderSummary: result.builderSummary,
-          keyPatterns: result.keyPatterns,
-          deploymentDetected: result.deploymentDetected,
-          testCoverageSignals: result.testCoverageSignals,
-          modelVersion: 'gpt-4o-mini-v1',
-        },
-        update: {
-          architectureComplexity: result.architectureComplexity,
-          codeQualitySignals: result.codeQualitySignals,
-          executionMaturity: result.executionMaturity,
-          originalityScore: result.originalityScore,
-          inferredSkills: result.inferredSkills,
-          probableDomains: result.probableDomains,
-          builderSummary: result.builderSummary,
-          keyPatterns: result.keyPatterns,
-          deploymentDetected: result.deploymentDetected,
-          testCoverageSignals: result.testCoverageSignals,
-          analyzedAt: new Date(),
-          modelVersion: 'gpt-4o-mini-v1',
-        },
-      });
-
-      // Mark COMPLETED
-      await this.prisma.repository.update({
-        where: { id: repositoryId },
-        data: { analysisStatus: 'COMPLETED' },
-      });
+      // Persist analysis result + mark COMPLETED atomically so status never
+      // diverges from the stored analysis data (partial writes caused re-analysis).
+      await this.prisma.$transaction([
+        this.prisma.repositoryAnalysis.upsert({
+          where: { repositoryId },
+          create: {
+            repositoryId,
+            architectureComplexity: result.architectureComplexity,
+            codeQualitySignals: result.codeQualitySignals,
+            executionMaturity: result.executionMaturity,
+            originalityScore: result.originalityScore,
+            inferredSkills: result.inferredSkills,
+            probableDomains: result.probableDomains,
+            builderSummary: result.builderSummary,
+            keyPatterns: result.keyPatterns,
+            deploymentDetected: result.deploymentDetected,
+            testCoverageSignals: result.testCoverageSignals,
+            modelVersion: 'gemini-1.5-flash',
+          },
+          update: {
+            architectureComplexity: result.architectureComplexity,
+            codeQualitySignals: result.codeQualitySignals,
+            executionMaturity: result.executionMaturity,
+            originalityScore: result.originalityScore,
+            inferredSkills: result.inferredSkills,
+            probableDomains: result.probableDomains,
+            builderSummary: result.builderSummary,
+            keyPatterns: result.keyPatterns,
+            deploymentDetected: result.deploymentDetected,
+            testCoverageSignals: result.testCoverageSignals,
+            analyzedAt: new Date(),
+            modelVersion: 'gemini-1.5-flash',
+          },
+        }),
+        this.prisma.repository.update({
+          where: { id: repositoryId },
+          data: { analysisStatus: 'COMPLETED' },
+        }),
+      ]);
 
       logger.info({ repositoryId, repo: repo.fullName }, 'Repository analysis completed');
       return result;

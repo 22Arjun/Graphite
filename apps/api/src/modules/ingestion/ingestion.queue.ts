@@ -186,10 +186,12 @@ export class JobQueue {
   }
 
   /**
-   * Expire any PROCESSING jobs that have been running for >15 minutes.
+   * Expire any PROCESSING jobs that have been running for >60 minutes.
+   * 60 min threshold accounts for large repos: GITHUB_INGEST + REPO_ANALYSIS
+   * + REPUTATION_COMPUTE + GRAPH_BUILD can legitimately take 30-45 minutes.
    */
   private async expireStaleJobs(builderId: string): Promise<void> {
-    const staleThreshold = new Date(Date.now() - 15 * 60 * 1000);
+    const staleThreshold = new Date(Date.now() - 60 * 60 * 1000);
     await this.prisma.ingestionJob.updateMany({
       where: {
         builderId,
@@ -198,7 +200,7 @@ export class JobQueue {
       },
       data: {
         status: 'FAILED',
-        error: 'Job timed out — took longer than 15 minutes',
+        error: 'Job timed out — took longer than 60 minutes',
         completedAt: new Date(),
       },
     });

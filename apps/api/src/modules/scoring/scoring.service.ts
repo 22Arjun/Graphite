@@ -51,27 +51,29 @@ export class ScoringService {
       this.computeInnovation(repos),
     ];
 
-    // Upsert each dimension score
-    for (const score of scores) {
-      await this.prisma.reputationScore.upsert({
-        where: { builderId_dimension: { builderId, dimension: score.dimension as ReputationDimension } },
-        create: {
-          builderId,
-          dimension: score.dimension as ReputationDimension,
-          score: score.score,
-          confidence: score.confidence,
-          signals: score.signals,
-          trend: score.trend,
-        },
-        update: {
-          score: score.score,
-          confidence: score.confidence,
-          signals: score.signals,
-          trend: score.trend,
-          computedAt: new Date(),
-        },
-      });
-    }
+    // Batch all 5 dimension upserts in a single transaction to reduce lock contention
+    await this.prisma.$transaction(
+      scores.map((score) =>
+        this.prisma.reputationScore.upsert({
+          where: { builderId_dimension: { builderId, dimension: score.dimension as ReputationDimension } },
+          create: {
+            builderId,
+            dimension: score.dimension as ReputationDimension,
+            score: score.score,
+            confidence: score.confidence,
+            signals: score.signals,
+            trend: score.trend,
+          },
+          update: {
+            score: score.score,
+            confidence: score.confidence,
+            signals: score.signals,
+            trend: score.trend,
+            computedAt: new Date(),
+          },
+        })
+      )
+    );
 
     // Upsert aggregated skill tags from all repo analyses
     await this.aggregateSkillTags(builderId, repos);
@@ -330,22 +332,22 @@ export class ScoringService {
       });
     }
 
-    // Upsert skills
-    for (const [name, data] of skillMap) {
-      await this.prisma.skillTag.upsert({
-        where: { builderId_name: { builderId, name } },
-        create: {
-          builderId,
-          name,
-          category: data.category as any,
-          confidence: data.confidence,
-          inferredFrom: data.sources,
-        },
-        update: {
-          confidence: data.confidence,
-          inferredFrom: data.sources,
-        },
-      });
+    // Replace skill tags atomically: delete existing then bulk-insert new set.
+    // Eliminates N individual upserts (one per skill) which cause lock contention.
+    if (skillMap.size > 0) {
+      await this.prisma.$transaction([
+        this.prisma.skillTag.deleteMany({ where: { builderId } }),
+        this.prisma.skillTag.createMany({
+          data: Array.from(skillMap.entries()).map(([name, data]) => ({
+            builderId,
+            name,
+            category: data.category as any,
+            confidence: data.confidence,
+            inferredFrom: data.sources,
+          })),
+          skipDuplicates: true,
+        }),
+      ]);
     }
   }
 

@@ -146,7 +146,9 @@ export class IngestionRepository {
       );
 
       return { repoId, isNew };
-    }, { timeout: 30000 });
+    // 20s — safely below Supabase's 30s server-side statement_timeout so Prisma
+    // handles the error gracefully rather than the server killing the connection.
+    }, { timeout: 20000 });
   }
 
   /**

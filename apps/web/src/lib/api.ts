@@ -38,17 +38,10 @@ api.interceptors.response.use(
 // -------------------------------------------------------
 
 export const ingestionApi = {
-  trigger: (fullSync = false) =>
-    api.post('/ingestion/trigger', { fullSync }),
-  getJobs: () =>
-    api.get('/ingestion/jobs'),
-  reset: () =>
-    api.post('/ingestion/reset'),
+  trigger: () => api.post('/ingestion/trigger'),
 };
 
 export const analysisApi = {
-  triggerRepo: (repositoryId: string) =>
-    api.post(`/analysis/trigger/${repositoryId}`),
   getStatus: (repositoryId: string) =>
     api.get(`/analysis/status/${repositoryId}`),
 };
@@ -75,8 +68,6 @@ export const scoringApi = {
 export const profileApi = {
   update: (data: { displayName?: string; bio?: string }) =>
     api.patch('/builder/profile', data),
-  triggerAnalyzeAll: () =>
-    api.post('/analysis/trigger-all'),
 };
 
 export const sourcesApi = {

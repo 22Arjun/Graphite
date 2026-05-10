@@ -24,7 +24,7 @@ import {
   Edit2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { api, profileApi, sourcesApi } from '@/lib/api';
+import { api, profileApi, sourcesApi, ingestionApi } from '@/lib/api';
 import { useAuth } from '@/hooks/use-auth';
 import { useToast } from '@/hooks/use-toast';
 
@@ -564,9 +564,9 @@ const Settings: React.FC = () => {
   });
 
   const reanalyzeAll = useMutation({
-    mutationFn: () => profileApi.triggerAnalyzeAll(),
-    onSuccess: () => toast({ title: 'Re-analysis started', description: 'All pending and failed repos are being re-analyzed.' }),
-    onError: () => toast({ title: 'Failed to start re-analysis', variant: 'destructive' }),
+    mutationFn: () => ingestionApi.trigger(),
+    onSuccess: () => toast({ title: 'Sync started', description: 'Re-analyzing your GitHub repos. Scores will update shortly.' }),
+    onError: () => toast({ title: 'Failed to start sync', variant: 'destructive' }),
   });
 
   const githubConnected = authBuilder?.githubConnected ?? !!profileData?.githubProfile;

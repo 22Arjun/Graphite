@@ -23,7 +23,6 @@ export class ScoringService {
       where: { id: builderId },
       include: {
         repositories: {
-          where: { analysisStatus: 'COMPLETED' },
           include: {
             analysis: true,
             languages: true,

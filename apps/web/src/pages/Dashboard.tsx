@@ -11,12 +11,9 @@ import {
   ArrowRight,
   Hexagon,
   Sparkles,
-  Clock,
   Loader2,
   Github,
   Play,
-  AlertCircle,
-  RefreshCw,
   Linkedin,
   Twitter,
   Trophy,
@@ -26,7 +23,6 @@ import {
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
 import SkillTagCloud from '@/components/SkillTagCloud';
-import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { api, ingestionApi } from '@/lib/api';
 import { useAuth } from '@/hooks/use-auth';
@@ -102,6 +98,9 @@ const Dashboard: React.FC = () => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
+  const [isSyncing, setIsSyncing] = React.useState(false);
+  // Timestamp captured when user triggers sync — used to detect when lastSyncedAt advances past it
+  const [syncTriggeredAt, setSyncTriggeredAt] = React.useState<number | null>(null);
 
   // Show GitHub connected toast after OAuth redirect
   React.useEffect(() => {
@@ -116,47 +115,39 @@ const Dashboard: React.FC = () => {
       const response: any = await api.get('/builder/profile');
       return response.data;
     },
+    // Poll every 4s while sync is in flight; stop once lastSyncedAt advances past trigger time
+    refetchInterval: isSyncing ? 4000 : false,
     retry: false,
   });
 
-  // Poll jobs while any are active
-  const { data: jobsData } = useQuery({
-    queryKey: ['ingestionJobs'],
-    queryFn: async () => {
-      const response: any = await ingestionApi.getJobs();
-      return response.data as any[];
-    },
-    refetchInterval: (query: any) => {
-      const jobs: any[] = query?.state?.data ?? [];
-      const hasActive = jobs.some((j: any) => j.status === 'QUEUED' || j.status === 'PROCESSING');
-      if (hasActive) return 3000;
-      // Keep polling briefly after a failure so the error banner appears quickly
-      const hasRecentFailed = jobs.some(
-        (j: any) => j.status === 'FAILED' && j.jobType === 'GITHUB_INGEST' &&
-          Date.now() - new Date(j.updatedAt ?? j.createdAt).getTime() < 60_000
-      );
-      return hasRecentFailed ? 5000 : false;
-    },
-    retry: false,
-  });
+  // Detect sync completion: backend updates lastSyncedAt only after scoring is done
+  React.useEffect(() => {
+    if (!isSyncing || !syncTriggeredAt || !apiData?.githubProfile?.lastSyncedAt) return;
+    const serverSyncedAt = new Date(apiData.githubProfile.lastSyncedAt).getTime();
+    if (serverSyncedAt >= syncTriggeredAt) {
+      setIsSyncing(false);
+      setSyncTriggeredAt(null);
+      toast({ title: 'Sync complete', description: 'Reputation scores have been updated.' });
+    }
+  }, [apiData?.githubProfile?.lastSyncedAt, isSyncing, syncTriggeredAt]);
+
+  // Safety timeout: stop polling after 3 minutes regardless
+  React.useEffect(() => {
+    if (!isSyncing) return;
+    const t = setTimeout(() => { setIsSyncing(false); setSyncTriggeredAt(null); }, 3 * 60 * 1000);
+    return () => clearTimeout(t);
+  }, [isSyncing]);
 
   const triggerIngestion = useMutation({
     mutationFn: () => ingestionApi.trigger(),
     onSuccess: () => {
-      toast({ title: 'Analysis started', description: 'GitHub ingestion pipeline has been triggered.' });
-      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] });
+      setSyncTriggeredAt(Date.now());
+      setIsSyncing(true);
+      toast({ title: 'Sync started', description: 'Analyzing your GitHub repos. Scores will appear shortly.' });
     },
     onError: (err: any) => {
-      const msg = err?.response?.data?.error?.message ?? 'Failed to start analysis';
+      const msg = err?.response?.data?.error?.message ?? 'Failed to start sync';
       toast({ title: msg, variant: 'destructive' });
-    },
-  });
-
-  const resetJobs = useMutation({
-    mutationFn: () => ingestionApi.reset(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] });
-      toast({ title: 'Jobs reset', description: 'Stuck jobs cleared. You can now retry.' });
     },
   });
 
@@ -169,20 +160,6 @@ const Dashboard: React.FC = () => {
     { label: 'Commits', value: builder.github_stats.total_commits.toLocaleString(), icon: Code2, change: '' },
   ];
 
-  const allJobs: any[] = jobsData ?? [];
-  const activeJobs = allJobs.filter((j) => j.status === 'PROCESSING' || j.status === 'QUEUED');
-
-  // A job is "stuck" if it's been PROCESSING for >5 minutes without completing
-  const stuckJob = activeJobs.find(
-    (j) => j.status === 'PROCESSING' &&
-      j.startedAt &&
-      Date.now() - new Date(j.startedAt).getTime() > 5 * 60 * 1000
-  );
-
-  const recentFailedJob = allJobs.find(
-    (j) => j.status === 'FAILED' && j.jobType === 'GITHUB_INGEST' &&
-      Date.now() - new Date(j.updatedAt ?? j.createdAt).getTime() < 10 * 60 * 1000
-  );
   const githubConnected = authBuilder?.githubConnected ?? apiData?.githubProfile != null;
 
   return (
@@ -225,66 +202,11 @@ const Dashboard: React.FC = () => {
           </motion.div>
         )}
 
-        {/* Active jobs banner */}
-        {activeJobs.length > 0 && (
-          <motion.div
-            custom={1} variants={fadeIn}
-            className={`mb-6 rounded-lg border p-4 ${stuckJob ? 'border-amber-500/30 bg-amber-500/5' : 'border-primary/20 bg-primary/5'}`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                {stuckJob
-                  ? <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
-                  : <Clock className="h-4 w-4 text-primary animate-pulse shrink-0" />}
-                <span className="text-sm font-medium text-foreground">
-                  {stuckJob ? 'Job appears stuck — may need a reset' : 'Analysis in progress'}
-                </span>
-              </div>
-              {stuckJob && (
-                <Button
-                  size="sm" variant="outline"
-                  className="border-amber-500/30 text-amber-600 hover:bg-amber-500/10 h-7 text-xs"
-                  onClick={() => resetJobs.mutate()}
-                  disabled={resetJobs.isPending}
-                >
-                  <RefreshCw className={`h-3 w-3 mr-1.5 ${resetJobs.isPending ? 'animate-spin' : ''}`} />
-                  Reset & Retry
-                </Button>
-              )}
-            </div>
-            {activeJobs.map((job: any) => (
-              <div key={job.id} className="mb-2 last:mb-0">
-                <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                  <span className="capitalize">{job.jobType?.replace(/_/g, ' ')}</span>
-                  <span className="font-mono">{job.progress}%</span>
-                </div>
-                <Progress value={job.progress} className="h-1.5" />
-              </div>
-            ))}
-          </motion.div>
-        )}
-
-        {/* Failed job banner */}
-        {!activeJobs.length && recentFailedJob && (
-          <motion.div custom={1} variants={fadeIn} className="mb-6 rounded-lg border border-destructive/20 bg-destructive/5 p-4 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
-              <div>
-                <p className="text-sm font-medium text-foreground">Ingestion failed</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {recentFailedJob.error ?? 'An error occurred during GitHub ingestion.'}
-                </p>
-              </div>
-            </div>
-            <Button
-              size="sm" variant="outline"
-              className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10"
-              onClick={() => triggerIngestion.mutate()}
-              disabled={triggerIngestion.isPending}
-            >
-              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-              Retry
-            </Button>
+        {/* Syncing banner */}
+        {isSyncing && (
+          <motion.div custom={1} variants={fadeIn} className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4 flex items-center gap-3">
+            <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
+            <p className="text-sm text-foreground">Analyzing your GitHub repos — scores will update shortly.</p>
           </motion.div>
         )}
 
@@ -479,14 +401,14 @@ const Dashboard: React.FC = () => {
                 {githubConnected && (
                   <button
                     onClick={() => triggerIngestion.mutate()}
-                    disabled={triggerIngestion.isPending || activeJobs.length > 0}
+                    disabled={triggerIngestion.isPending || isSyncing}
                     className="w-full flex items-center justify-between rounded-md bg-primary/10 border border-primary/20 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <span className="flex items-center gap-1.5">
                       <Play className="h-3 w-3" />
-                      {triggerIngestion.isPending ? 'Starting...' : activeJobs.length > 0 ? 'Analysis running...' : 'Sync & Analyze GitHub'}
+                      {isSyncing ? 'Analyzing...' : 'Sync & Analyze GitHub'}
                     </span>
-                    {triggerIngestion.isPending || activeJobs.length > 0
+                    {isSyncing
                       ? <Loader2 className="h-3 w-3 animate-spin" />
                       : <ArrowRight className="h-3 w-3" />}
                   </button>

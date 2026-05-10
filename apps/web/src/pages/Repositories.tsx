@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Hexagon, Search, RefreshCw, CheckCircle2, Clock, AlertCircle, Loader2, Play } from 'lucide-react';
 import RepoCard from '@/components/RepoCard';
 import type { AnalysisStatus } from '@/lib/types';
-import { api, analysisApi, profileApi } from '@/lib/api';
+import { api, ingestionApi } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 
 const fadeIn = {
@@ -77,24 +77,22 @@ const Repositories: React.FC = () => {
   const queryClient = useQueryClient();
 
   const analyzeRepo = useMutation({
-    mutationFn: (repoId: string) => analysisApi.triggerRepo(repoId),
+    mutationFn: (_repoId: string) => ingestionApi.trigger(),
     onSuccess: () => {
-      toast({ title: 'Analysis started', description: 'Repository analysis has been queued.' });
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['repositories'] }), 2000);
+      toast({ title: 'Sync started', description: 'Re-analyzing your GitHub repos. Scores will update shortly.' });
     },
     onError: () => {
-      toast({ title: 'Failed to start analysis', variant: 'destructive' });
+      toast({ title: 'Failed to start sync', variant: 'destructive' });
     },
   });
 
   const analyzeAll = useMutation({
-    mutationFn: () => profileApi.triggerAnalyzeAll(),
+    mutationFn: () => ingestionApi.trigger(),
     onSuccess: () => {
-      toast({ title: 'Re-analysis started', description: 'All pending and failed repos have been queued.' });
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['repositories'] }), 3000);
+      toast({ title: 'Sync started', description: 'Re-analyzing your GitHub repos. Scores will update shortly.' });
     },
     onError: () => {
-      toast({ title: 'Failed to start re-analysis', variant: 'destructive' });
+      toast({ title: 'Failed to start sync', variant: 'destructive' });
     },
   });
 

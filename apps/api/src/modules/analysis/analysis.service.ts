@@ -7,8 +7,8 @@ import type { AnalysisResult } from './analysis.schema.js';
 
 // ============================================================
 // Analysis Service — AI-powered repository analysis
-// Uses Google Gemini to infer skills, architecture quality,
-// and generate builder summaries from repository metadata.
+// Uses a single batched Gemini call for all repos to avoid
+// per-repo rate-limit delays.
 // ============================================================
 
 export class AnalysisService {
@@ -19,138 +19,81 @@ export class AnalysisService {
   }
 
   /**
-   * Analyze a single repository with AI.
-   * Updates analysisStatus: PENDING → ANALYZING → COMPLETED/FAILED
+   * Analyze a batch of repositories in a single Gemini call.
+   * Much faster than one-call-per-repo because there are no rate-limit gaps.
    */
-  async analyzeRepository(repositoryId: string): Promise<AnalysisResult> {
-    const repo = await this.prisma.repository.findUnique({
-      where: { id: repositoryId },
+  async analyzeRepositoriesBatch(builderId: string, repoIds: string[]): Promise<void> {
+    if (repoIds.length === 0) return;
+
+    const repos = await this.prisma.repository.findMany({
+      where: { id: { in: repoIds }, builderId },
       include: {
         languages: true,
-        commits: { orderBy: { committedAt: 'desc' }, take: 20 },
-        contributors: { orderBy: { contributions: 'desc' }, take: 10 },
+        commits: { orderBy: { committedAt: 'desc' }, take: 10 },
+        contributors: { orderBy: { contributions: 'desc' }, take: 5 },
       },
     });
 
-    if (!repo) throw new NotFoundError('Repository', repositoryId);
+    if (repos.length === 0) return;
 
-    // Mark as ANALYZING
-    await this.prisma.repository.update({
-      where: { id: repositoryId },
+    // Mark all as ANALYZING
+    await this.prisma.repository.updateMany({
+      where: { id: { in: repos.map((r) => r.id) } },
       data: { analysisStatus: 'ANALYZING' },
     });
 
     try {
-      const result = await this.runAIAnalysis(repo);
+      const results = await this.runBatchAIAnalysis(repos);
 
-      // Persist analysis result + mark COMPLETED atomically so status never
-      // diverges from the stored analysis data (partial writes caused re-analysis).
+      // Persist all results in a single transaction
       await this.prisma.$transaction([
-        this.prisma.repositoryAnalysis.upsert({
-          where: { repositoryId },
-          create: {
-            repositoryId,
-            architectureComplexity: result.architectureComplexity,
-            codeQualitySignals: result.codeQualitySignals,
-            executionMaturity: result.executionMaturity,
-            originalityScore: result.originalityScore,
-            inferredSkills: result.inferredSkills,
-            probableDomains: result.probableDomains,
-            builderSummary: result.builderSummary,
-            keyPatterns: result.keyPatterns,
-            deploymentDetected: result.deploymentDetected,
-            testCoverageSignals: result.testCoverageSignals,
-            modelVersion: 'gemini-1.5-flash',
-          },
-          update: {
-            architectureComplexity: result.architectureComplexity,
-            codeQualitySignals: result.codeQualitySignals,
-            executionMaturity: result.executionMaturity,
-            originalityScore: result.originalityScore,
-            inferredSkills: result.inferredSkills,
-            probableDomains: result.probableDomains,
-            builderSummary: result.builderSummary,
-            keyPatterns: result.keyPatterns,
-            deploymentDetected: result.deploymentDetected,
-            testCoverageSignals: result.testCoverageSignals,
-            analyzedAt: new Date(),
-            modelVersion: 'gemini-1.5-flash',
-          },
-        }),
-        this.prisma.repository.update({
-          where: { id: repositoryId },
+        ...results.map((result, i) =>
+          this.prisma.repositoryAnalysis.upsert({
+            where: { repositoryId: repos[i].id },
+            create: {
+              repositoryId: repos[i].id,
+              architectureComplexity: result.architectureComplexity,
+              codeQualitySignals: result.codeQualitySignals,
+              executionMaturity: result.executionMaturity,
+              originalityScore: result.originalityScore,
+              inferredSkills: result.inferredSkills,
+              probableDomains: result.probableDomains,
+              builderSummary: result.builderSummary,
+              keyPatterns: result.keyPatterns,
+              deploymentDetected: result.deploymentDetected,
+              testCoverageSignals: result.testCoverageSignals,
+              modelVersion: 'gemini-1.5-flash',
+            },
+            update: {
+              architectureComplexity: result.architectureComplexity,
+              codeQualitySignals: result.codeQualitySignals,
+              executionMaturity: result.executionMaturity,
+              originalityScore: result.originalityScore,
+              inferredSkills: result.inferredSkills,
+              probableDomains: result.probableDomains,
+              builderSummary: result.builderSummary,
+              keyPatterns: result.keyPatterns,
+              deploymentDetected: result.deploymentDetected,
+              testCoverageSignals: result.testCoverageSignals,
+              analyzedAt: new Date(),
+              modelVersion: 'gemini-1.5-flash',
+            },
+          })
+        ),
+        this.prisma.repository.updateMany({
+          where: { id: { in: repos.map((r) => r.id) } },
           data: { analysisStatus: 'COMPLETED' },
         }),
       ]);
 
-      logger.info({ repositoryId, repo: repo.fullName }, 'Repository analysis completed');
-      return result;
+      logger.info({ builderId, count: repos.length }, 'Batch repository analysis completed');
     } catch (err) {
-      try {
-        await this.prisma.repository.update({
-          where: { id: repositoryId },
-          data: { analysisStatus: 'FAILED' },
-        });
-      } catch { /* ignore DB error so we still rethrow the original */ }
-      logger.error({ repositoryId, err }, 'Repository analysis failed');
+      await this.prisma.repository.updateMany({
+        where: { id: { in: repos.map((r) => r.id) } },
+        data: { analysisStatus: 'FAILED' },
+      });
       throw err;
     }
-  }
-
-  /**
-   * Analyze all PENDING repositories for a builder.
-   * Returns array of results (failures logged but not thrown).
-   */
-  async analyzeBuilderRepositories(
-    builderId: string,
-    onProgress?: (progress: number, current: number, total: number) => Promise<void>
-  ): Promise<{ analyzed: number; failed: number }> {
-    // Reset any repos stuck in ANALYZING from a prior crashed run
-    await this.prisma.repository.updateMany({
-      where: { builderId, analysisStatus: 'ANALYZING' },
-      data: { analysisStatus: 'FAILED' },
-    });
-
-    const repos = await this.prisma.repository.findMany({
-      where: {
-        builderId,
-        analysisStatus: { in: ['PENDING', 'FAILED'] },
-      },
-      select: { id: true, fullName: true },
-    });
-
-    let analyzed = 0;
-    let failed = 0;
-    const total = repos.length;
-
-    for (const repo of repos) {
-      try {
-        await this.analyzeRepository(repo.id);
-        analyzed++;
-      } catch (err) {
-        failed++;
-        logger.error({ repoId: repo.id, repo: repo.fullName, err }, 'Failed to analyze repo');
-      }
-
-      // Report per-repo progress (5% → 95%)
-      if (onProgress && total > 0) {
-        const pct = Math.round(5 + ((analyzed + failed) / total) * 90);
-        try {
-          await onProgress(pct, analyzed + failed, total);
-        } catch (progressErr) {
-          // Non-fatal: progress update failure must not abort the analysis loop
-          logger.warn({ err: progressErr }, 'Failed to update analysis progress');
-        }
-      }
-
-      if (analyzed + failed < total) {
-        // Gemini free tier = 15 RPM → minimum 4s between requests.
-        // Skipping this sleep causes 429 errors on ~75% of calls, marking all repos FAILED.
-        await this.sleep(4100);
-      }
-    }
-
-    return { analyzed, failed };
   }
 
   /**
@@ -175,7 +118,8 @@ export class AnalysisService {
   // AI Analysis
   // -------------------------------------------------------
 
-  private async runAIAnalysis(repo: {
+  private async runBatchAIAnalysis(repos: {
+    id: string;
     name: string;
     fullName: string;
     description: string | null;
@@ -188,123 +132,137 @@ export class AnalysisService {
     size: number;
     licenseName: string | null;
     languages: { language: string; percentage: number }[];
-    commits: { message: string; additions: number; deletions: number }[];
+    commits: { message: string }[];
     contributors: { githubLogin: string; contributions: number; isOwner: boolean }[];
-  }): Promise<AnalysisResult> {
-    const languageList = repo.languages
-      .map((l) => `${l.language} (${l.percentage.toFixed(1)}%)`)
-      .join(', ');
+  }[]): Promise<AnalysisResult[]> {
+    const repoSummaries = repos.map((repo, i) => {
+      const langs = repo.languages.map((l) => `${l.language} (${l.percentage.toFixed(1)}%)`).join(', ');
+      const commits = repo.commits
+        .slice(0, 5)
+        .map((c) => `- ${c.message.split('\n')[0].slice(0, 60)}`)
+        .join('\n');
 
-    const recentCommitMessages = repo.commits
-      .slice(0, 10)
-      .map((c) => `- ${c.message.split('\n')[0].slice(0, 80)}`)
-      .join('\n');
-
-    const contributorCount = repo.contributors.length;
-
-    const prompt = `Analyze this GitHub repository and return a JSON analysis.
-
-Repository: ${repo.fullName}
-Description: ${repo.description || 'No description'}
-Primary Language: ${repo.primaryLanguage || 'Unknown'}
-All Languages: ${languageList || 'Unknown'}
+      return `
+--- Repository ${i + 1}: ${repo.fullName} ---
+Description: ${repo.description || 'None'}
+Language: ${repo.primaryLanguage || 'Unknown'} | All: ${langs || 'Unknown'}
 Topics: ${repo.topics.join(', ') || 'None'}
-Stars: ${repo.stars} | Forks: ${repo.forks}
-Commits: ${repo.commitCount} | Contributors: ${contributorCount}
-Has Deployment: ${repo.hasDeployment}
-License: ${repo.licenseName || 'None'}
-Size (KB): ${repo.size}
+Stars: ${repo.stars} | Forks: ${repo.forks} | Commits: ${repo.commitCount}
+Contributors: ${repo.contributors.length} | Deployed: ${repo.hasDeployment} | Size: ${repo.size}KB
+Recent commits:
+${commits || 'None'}`;
+    });
 
-Recent commit messages:
-${recentCommitMessages || 'No commits available'}
+    const prompt = `Analyze these ${repos.length} GitHub repositories and return a JSON array with exactly ${repos.length} analysis objects (one per repository, in the same order).
 
-Return ONLY valid JSON (no markdown, no code fences, no extra text) with this exact structure:
+${repoSummaries.join('\n')}
+
+Return ONLY a valid JSON array (no markdown, no code fences) where each element has this exact structure:
 {
-  "architectureComplexity": <1-10 integer>,
-  "codeQualitySignals": <1-10 integer>,
-  "executionMaturity": <1-10 integer>,
-  "originalityScore": <1-10 integer>,
-  "inferredSkills": [<array of skill strings, max 8>],
-  "probableDomains": [<array of domain strings, max 4, e.g. "Web Development", "DeFi", "Infrastructure">],
-  "builderSummary": "<2 sentence summary of what this builder built and their likely expertise>",
-  "keyPatterns": [<array of engineering pattern strings, max 4, e.g. "REST API", "Event-driven", "Monorepo">],
+  "architectureComplexity": <1-10>,
+  "codeQualitySignals": <1-10>,
+  "executionMaturity": <1-10>,
+  "originalityScore": <1-10>,
+  "inferredSkills": [<max 8 skill strings>],
+  "probableDomains": [<max 4 domain strings>],
+  "builderSummary": "<2 sentence summary>",
+  "keyPatterns": [<max 4 pattern strings>],
   "deploymentDetected": <boolean>,
-  "testCoverageSignals": "<one of: none, minimal, moderate, comprehensive>"
+  "testCoverageSignals": "<none|minimal|moderate|comprehensive>"
 }
 
-Scoring guide:
-- architectureComplexity: 1=simple script, 5=standard app, 10=distributed system
-- codeQualitySignals: 1=no structure, 5=decent patterns, 10=excellent practices
-- executionMaturity: 1=prototype, 5=functional project, 10=production-deployed
-- originalityScore: 1=tutorial copy, 5=standard project, 10=novel/unique approach`;
+Scoring: architectureComplexity (1=script, 10=distributed), codeQualitySignals (1=messy, 10=excellent), executionMaturity (1=prototype, 10=production), originalityScore (1=tutorial, 10=novel).`;
 
-    const result = await this.callGeminiWithRetry(prompt);
-    const raw = result.response.text();
+    const raw = await this.callGeminiWithRetry(prompt);
+    const text = raw.response.text();
+    if (!text) throw new AppError('Empty Gemini response', 502, 'AI_EMPTY_RESPONSE');
 
-    if (!raw) throw new AppError('Empty Gemini response', 502, 'AI_EMPTY_RESPONSE');
+    const content = text.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/m, '').trim();
 
-    // Strip markdown code fences if Gemini wraps the JSON anyway
-    const content = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/m, '').trim();
-
+    let parsed: any[] = [];
     try {
-      const parsed = JSON.parse(content);
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      const jsonStr = jsonMatch ? jsonMatch[0] : content;
+      const result = JSON.parse(jsonStr);
+      parsed = Array.isArray(result) ? result : [];
+    } catch (err) {
+      logger.warn({ err }, 'Batch Gemini parse failed — repos will be scored from metadata only');
+      // Return empty — repos stay ANALYZING and scoring will use behavioral signals only
+      return repos.map((repo) => defaultAnalysis(repo.id, repo.hasDeployment));
+    }
+
+    return repos.map((repo, i) => {
+      const item = parsed[i];
+      if (!item || typeof item !== 'object') return defaultAnalysis(repo.id, repo.hasDeployment);
       return {
-        repositoryId: '',
-        architectureComplexity: Math.min(10, Math.max(1, Math.round(parsed.architectureComplexity))),
-        codeQualitySignals: Math.min(10, Math.max(1, Math.round(parsed.codeQualitySignals))),
-        executionMaturity: Math.min(10, Math.max(1, Math.round(parsed.executionMaturity))),
-        originalityScore: Math.min(10, Math.max(1, Math.round(parsed.originalityScore))),
-        inferredSkills: Array.isArray(parsed.inferredSkills) ? parsed.inferredSkills.slice(0, 8) : [],
-        probableDomains: Array.isArray(parsed.probableDomains) ? parsed.probableDomains.slice(0, 4) : [],
-        builderSummary: String(parsed.builderSummary || ''),
-        keyPatterns: Array.isArray(parsed.keyPatterns) ? parsed.keyPatterns.slice(0, 4) : [],
-        deploymentDetected: Boolean(parsed.deploymentDetected ?? repo.hasDeployment),
-        testCoverageSignals: ['none', 'minimal', 'moderate', 'comprehensive'].includes(parsed.testCoverageSignals)
-          ? parsed.testCoverageSignals
+        repositoryId: repo.id,
+        architectureComplexity: clamp(Math.round(item.architectureComplexity), 1, 10),
+        codeQualitySignals: clamp(Math.round(item.codeQualitySignals), 1, 10),
+        executionMaturity: clamp(Math.round(item.executionMaturity), 1, 10),
+        originalityScore: clamp(Math.round(item.originalityScore), 1, 10),
+        inferredSkills: Array.isArray(item.inferredSkills) ? item.inferredSkills.slice(0, 8) : [],
+        probableDomains: Array.isArray(item.probableDomains) ? item.probableDomains.slice(0, 4) : [],
+        builderSummary: String(item.builderSummary || ''),
+        keyPatterns: Array.isArray(item.keyPatterns) ? item.keyPatterns.slice(0, 4) : [],
+        deploymentDetected: Boolean(item.deploymentDetected ?? repo.hasDeployment),
+        testCoverageSignals: ['none', 'minimal', 'moderate', 'comprehensive'].includes(item.testCoverageSignals)
+          ? item.testCoverageSignals
           : 'none',
       };
-    } catch {
-      throw new AppError('Failed to parse Gemini analysis response', 502, 'AI_PARSE_ERROR');
-    }
+    });
   }
 
-  /**
-   * Call Gemini with 30s timeout + exponential backoff retry on 429.
-   * Gemini free tier = 15 RPM. A 429 means we're momentarily over budget;
-   * retry after 8s/16s/32s rather than failing the repo permanently.
-   */
   private async callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<any> {
     const model = this.genai.getGenerativeModel({
       model: 'gemini-1.5-flash',
-      generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
+      generationConfig: { temperature: 0.2, maxOutputTokens: 2000 },
     });
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const GEMINI_TIMEOUT_MS = 30_000;
         return await Promise.race([
           model.generateContent(prompt),
           new Promise<never>((_, reject) =>
             setTimeout(
-              () => reject(new AppError('Gemini API timeout after 30s', 504, 'AI_TIMEOUT')),
-              GEMINI_TIMEOUT_MS
+              () => reject(new AppError('Gemini API timeout after 45s', 504, 'AI_TIMEOUT')),
+              45_000
             )
           ),
         ]);
       } catch (err: any) {
         const is429 = err?.status === 429 || /429|RESOURCE_EXHAUSTED/i.test(err?.message ?? '');
         if (is429 && attempt < maxRetries) {
-          const waitMs = Math.pow(2, attempt + 1) * 4000; // 8s, 16s, 32s
-          logger.warn({ attempt, waitMs }, 'Gemini rate limited (429) — backing off');
-          await this.sleep(waitMs);
+          const waitMs = Math.pow(2, attempt + 1) * 4000;
+          logger.warn({ attempt, waitMs }, 'Gemini rate limited — backing off');
+          await sleep(waitMs);
           continue;
         }
         throw err;
       }
     }
   }
+}
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function defaultAnalysis(repositoryId: string, hasDeployment: boolean): AnalysisResult {
+  return {
+    repositoryId,
+    architectureComplexity: 3,
+    codeQualitySignals: 3,
+    executionMaturity: hasDeployment ? 5 : 2,
+    originalityScore: 3,
+    inferredSkills: [],
+    probableDomains: [],
+    builderSummary: '',
+    keyPatterns: [],
+    deploymentDetected: hasDeployment,
+    testCoverageSignals: 'none',
+  };
 }

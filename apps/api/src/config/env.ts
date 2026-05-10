@@ -15,6 +15,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  DIRECT_URL: z.string().optional(), // kept for legacy Supabase setups; not required with Neon
 
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.string().default('7d'),

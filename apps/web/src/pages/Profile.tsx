@@ -1,11 +1,10 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Hexagon,
   Github,
   Wallet,
-  TrendingUp,
   Sparkles,
   Copy,
   Loader2,
@@ -13,7 +12,8 @@ import {
   Twitter,
   Trophy,
   FileText,
-  Link as LinkIcon,
+  Camera,
+  CheckCircle2,
 } from 'lucide-react';
 import ReputationRadar from '@/components/ReputationRadar';
 import ScoreRing from '@/components/ScoreRing';
@@ -89,6 +89,7 @@ function mapBuilderData(apiData: any) {
 }
 
 const Profile: React.FC = () => {
+  const queryClient = useQueryClient();
   const { data: apiData, isLoading } = useQuery({
     queryKey: ['builderProfile'],
     queryFn: async () => {
@@ -102,7 +103,52 @@ const Profile: React.FC = () => {
   });
 
   const builder = mapBuilderData(apiData) ?? EMPTY_BUILDER;
-  const [copied, setCopied] = React.useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Avatar upload state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadDone, setUploadDone] = useState(false);
+
+  // Resolved avatar: preview > API avatar > null
+  const resolvedAvatar = avatarPreview ?? apiData?.avatarUrl ?? null;
+
+  const handleAvatarClick = () => fileInputRef.current?.click();
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Instant local preview
+    const reader = new FileReader();
+    reader.onload = (ev) => setAvatarPreview(ev.target?.result as string);
+    reader.readAsDataURL(file);
+
+    // Upload to backend → Cloudinary
+    setUploading(true);
+    setUploadDone(false);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res: any = await api.post('/builder/profile/avatar', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      // Update preview to the CDN URL returned from backend
+      setAvatarPreview(res.data?.avatarUrl ?? avatarPreview);
+      setUploadDone(true);
+      // Invalidate profile cache so Navbar picks up the new avatar too
+      queryClient.invalidateQueries({ queryKey: ['builderProfile'] });
+      setTimeout(() => setUploadDone(false), 2500);
+    } catch (err) {
+      console.error('Avatar upload failed', err);
+      setAvatarPreview(null); // revert preview on failure
+    } finally {
+      setUploading(false);
+      // Reset input so the same file can be picked again if needed
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const copyWallet = () => {
     navigator.clipboard.writeText(builder.wallet_address);
@@ -139,8 +185,55 @@ const Profile: React.FC = () => {
           <div className="flex flex-col md:flex-row items-start gap-6">
             {/* Avatar & name */}
             <div className="flex items-center gap-4">
-              <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary border-2 border-primary/20">
-                {(builder.display_name || builder.github_username || '?').charAt(0).toUpperCase()}
+              {/* Clickable avatar with camera overlay */}
+              <div className="relative group shrink-0">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <button
+                  onClick={handleAvatarClick}
+                  disabled={uploading}
+                  className="relative h-16 w-16 rounded-full overflow-hidden border-2 border-primary/20 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+                  title="Change profile photo"
+                >
+                  {/* Photo or initial */}
+                  {resolvedAvatar ? (
+                    <img
+                      src={resolvedAvatar}
+                      alt="Avatar"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary">
+                      {(builder.display_name || builder.github_username || '?').charAt(0).toUpperCase()}
+                    </div>
+                  )}
+
+                  {/* Camera hover overlay */}
+                  {!uploading && (
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Camera className="h-5 w-5 text-white" />
+                    </div>
+                  )}
+
+                  {/* Upload spinner */}
+                  {uploading && (
+                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                      <Loader2 className="h-5 w-5 text-white animate-spin" />
+                    </div>
+                  )}
+                </button>
+
+                {/* Done checkmark badge */}
+                {uploadDone && (
+                  <div className="absolute -bottom-0.5 -right-0.5 h-5 w-5 rounded-full bg-primary flex items-center justify-center shadow-lg">
+                    <CheckCircle2 className="h-3 w-3 text-black" />
+                  </div>
+                )}
               </div>
               <div>
                 <h2 className="text-lg font-bold text-foreground">

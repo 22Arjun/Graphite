@@ -95,6 +95,9 @@ const Profile: React.FC = () => {
       const response: any = await api.get('/builder/profile');
       return response.data;
     },
+    // Keep polling every 8 s until the AI summary lands (written async after sync)
+    refetchInterval: (query) => (query.state.data?.aiSummary ? false : 8_000),
+    staleTime: 0,
     retry: false,
   });
 

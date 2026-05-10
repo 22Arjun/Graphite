@@ -120,18 +120,6 @@ export class ScoringService {
     // Upsert aggregated skill tags from all repo analyses
     await this.aggregateSkillTags(builderId, repos);
 
-    // Update builder AI summary from best repo summary
-    const bestSummary = repos
-      .filter((r) => r.analysis?.builderSummary)
-      .sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0))[0]?.analysis?.builderSummary;
-
-    if (bestSummary) {
-      await this.prisma.builder.update({
-        where: { id: builderId },
-        data: { aiSummary: bestSummary },
-      });
-    }
-
     logger.info({ builderId, scores: scores.map((s) => `${s.dimension}:${s.score}`) }, 'Reputation computed');
     return scores;
   }

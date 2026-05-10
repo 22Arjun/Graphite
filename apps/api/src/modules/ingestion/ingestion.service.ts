@@ -12,8 +12,11 @@ import { logger } from '../../lib/logger.js';
 // 1. Fetch all repos + pinned names (parallel)
 // 2. Select up to 5 high-signal repos
 // 3. Ingest all 5 in parallel
-// 4. Run AI analysis in a single batched Gemini call
+// 4. Run repo analysis (single Gemini call, structured JSON scores only)
 // 5. Compute reputation scores
+// 6. Update lastSyncedAt  ← frontend stops polling here
+// 7. Fire-and-forget builder summary after 6 s  ← separate Gemini call,
+//    small plain-text prompt, well past the 15 RPM rate-limit window
 // ============================================================
 
 export class IngestionService {
@@ -87,23 +90,37 @@ export class IngestionService {
       return;
     }
 
-    // Step 4: Single batched Gemini call for all repos
-    // Errors are caught internally — analysis failure is non-fatal, scoring still runs
+    // Step 4: Repo analysis — structured JSON scores only (no builder summary)
+    // Errors are non-fatal; scoring still runs on behavioral signals
     try {
       await this.analysis.analyzeRepositoriesBatch(builderId, repoIds);
     } catch (err) {
-      logger.error({ builderId, err }, 'Batch analysis failed — proceeding to score with available data');
+      logger.error({ builderId, err }, 'Repo analysis failed — proceeding with available data');
     }
 
-    // Step 5: Compute reputation scores from whatever data is available
+    // Step 5: Compute reputation scores
     await this.scoring.computeReputation(builderId);
 
-    // Update lastSyncedAt AFTER scores are written — frontend polls on this signal
+    // Step 6: Update lastSyncedAt — this is the signal the frontend polls on
     await this.prisma.gitHubProfile.update({
       where: { builderId },
       data: { lastSyncedAt: new Date() },
     });
 
     logger.info({ builderId, repos: repoIds.length, ms: Date.now() - startTime }, 'Sync complete');
+
+    // Step 7: Fire-and-forget builder summary.
+    //
+    // Runs 6 seconds after the repo-analysis Gemini call to clear the
+    // 15 RPM free-tier window (one slot = 60 s / 15 = 4 s, 6 s is safe).
+    // Uses a tiny plain-text prompt — far less likely to hit token limits.
+    // Falls back to a template if Gemini still fails.
+    setTimeout(() => {
+      this.analysis
+        .generateBuilderSummary(builderId)
+        .catch((err) =>
+          logger.error({ builderId, err }, 'Builder summary generation failed')
+        );
+    }, 6_000);
   }
 }

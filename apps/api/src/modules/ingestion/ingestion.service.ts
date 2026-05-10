@@ -120,18 +120,11 @@ export class IngestionService {
 
     logger.info({ builderId, repos: repoIds.length, ms: Date.now() - startTime }, 'Sync complete');
 
-    // Step 7: Fire-and-forget builder summary.
-    //
-    // Runs 6 seconds after the repo-analysis Gemini call to clear the
-    // 15 RPM free-tier window (one slot = 60 s / 15 = 4 s, 6 s is safe).
-    // Uses a tiny plain-text prompt — far less likely to hit token limits.
-    // Falls back to a template if Gemini still fails.
-    setTimeout(() => {
-      this.analysis
-        .generateBuilderSummary(builderId)
-        .catch((err) =>
-          logger.error({ builderId, err }, 'Builder summary generation failed')
-        );
-    }, 6_000);
+    // Step 8: Builder summary — wait 6 s to clear Gemini 15 RPM window,
+    // then generate. Awaited so it completes within the serverless request lifetime.
+    await new Promise((r) => setTimeout(r, 6_000));
+    await this.analysis.generateBuilderSummary(builderId).catch((err) =>
+      logger.error({ builderId, err }, 'Builder summary generation failed')
+    );
   }
 }

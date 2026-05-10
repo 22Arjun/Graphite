@@ -3,6 +3,7 @@ import { GitHubService } from '../github/github.service.js';
 import { IngestionRepository } from './ingestion.repository.js';
 import { AnalysisService } from '../analysis/analysis.service.js';
 import { ScoringService } from '../scoring/scoring.service.js';
+import { BuilderService } from '../builder/builder.service.js';
 import { NotFoundError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 
@@ -106,6 +107,9 @@ export class IngestionService {
       where: { builderId },
       data: { lastSyncedAt: new Date() },
     });
+
+    // Bust the profile cache so the next page load reads fresh scores from DB
+    BuilderService.invalidateProfile(builderId);
 
     logger.info({ builderId, repos: repoIds.length, ms: Date.now() - startTime }, 'Sync complete');
 

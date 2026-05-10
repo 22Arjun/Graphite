@@ -129,7 +129,7 @@ const Profile: React.FC = () => {
           {isLoading && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground/60 mt-2">
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Syncing live data...</span>
+              <span>Loading profile...</span>
             </div>
           )}
         </motion.div>

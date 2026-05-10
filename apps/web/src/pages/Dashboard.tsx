@@ -180,11 +180,11 @@ const Dashboard: React.FC = () => {
           </p>
         </motion.div>
 
-        {/* Loading indicator (subtle, doesn't change layout) */}
+        {/* Loading indicator — only shown on initial mount, just a DB read */}
         {isLoading && (
           <motion.div custom={0.5} variants={fadeIn} className="mb-4 flex items-center gap-2 text-xs text-muted-foreground/60">
             <Loader2 className="h-3 w-3 animate-spin" />
-            <span>Syncing live data...</span>
+            <span>Loading your profile...</span>
           </motion.div>
         )}
 

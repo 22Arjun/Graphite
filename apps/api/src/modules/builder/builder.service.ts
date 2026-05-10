@@ -3,6 +3,11 @@ import { BuilderRepository } from './builder.repository.js';
 import { NotFoundError } from '../../lib/errors.js';
 import type { PaginationParams } from '../../lib/types.js';
 
+// Simple in-memory profile cache — avoids repeated multi-query trips to Supabase
+// on every page load. TTL of 30 s; invalidated explicitly after a sync completes.
+const profileCache = new Map<string, { data: any; expiresAt: number }>();
+const CACHE_TTL_MS = 30_000;
+
 // ============================================================
 // Builder Service — Business logic for builder profiles
 // ============================================================
@@ -14,16 +19,24 @@ export class BuilderService {
     this.repo = new BuilderRepository(prisma);
   }
 
+  static invalidateProfile(builderId: string) {
+    profileCache.delete(builderId);
+  }
+
   /**
    * Get full builder profile.
    */
   async getProfile(builderId: string) {
-    const builder = await this.repo.findById(builderId);
+    const cached = profileCache.get(builderId);
+    if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+    const [builder, stats] = await Promise.all([
+      this.repo.findById(builderId),
+      this.repo.getGitHubStats(builderId),
+    ]);
     if (!builder) {
       throw new NotFoundError('Builder', builderId);
     }
-
-    const stats = await this.repo.getGitHubStats(builderId);
 
     // Compute overall reputation score from dimension scores
     const dimensions = builder.reputationScores;
@@ -32,7 +45,7 @@ export class BuilderService {
         ? Math.round(dimensions.reduce((sum, d) => sum + d.score, 0) / dimensions.length)
         : 0;
 
-    return {
+    const result = {
       ...builder,
       githubStats: stats,
       reputation: {
@@ -48,6 +61,9 @@ export class BuilderService {
         resume: !!builder.resumeData,
       },
     };
+
+    profileCache.set(builderId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
+    return result;
   }
 
   /**

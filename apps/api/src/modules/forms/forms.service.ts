@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 // Lazy-loaded to avoid DOMMatrix crash in serverless environments at import time
 let _pdfParse: ((buffer: Buffer) => Promise<{ text: string }>) | null = null;
@@ -167,7 +168,7 @@ export class FormsService {
 
     await this.prisma.formSubmission.update({
       where: { id: submissionId },
-      data: { analysisStatus: 'PENDING', analysisResult: undefined },
+      data: { analysisStatus: 'PENDING', analysisResult: Prisma.DbNull },
     });
 
     this.analysisService.analyzeSubmission(submissionId).catch((err) => {

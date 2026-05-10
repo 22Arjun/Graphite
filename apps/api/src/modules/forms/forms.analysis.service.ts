@@ -231,40 +231,74 @@ Base scores on actual evidence from the profile. If data is sparse, scores shoul
   }
 
   private async callGemini(prompt: string): Promise<FormAnalysisResult> {
-    const model = this.genai.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: { temperature: 0.15, maxOutputTokens: 1200 },
-    });
+    // Try primary model first, fall back to lite variant on quota errors
+    const modelNames = ['gemini-2.0-flash', 'gemini-2.0-flash-lite'];
 
-    for (let attempt = 0; attempt <= 3; attempt++) {
-      try {
-        const result = await Promise.race([
-          model.generateContent(prompt),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new AppError('Gemini timeout', 504, 'AI_TIMEOUT')), 45_000)
-          ),
-        ]);
+    for (const modelName of modelNames) {
+      const model = this.genai.getGenerativeModel({
+        model: modelName,
+        generationConfig: { temperature: 0.15, maxOutputTokens: 1200 },
+      });
 
-        const raw = result.response
-          .text()
-          .replace(/^```(?:json)?\n?/i, '')
-          .replace(/\n?```$/m, '')
-          .trim();
+      for (let attempt = 0; attempt <= 3; attempt++) {
+        try {
+          const result = await Promise.race([
+            model.generateContent(prompt),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new AppError('Gemini timeout', 504, 'AI_TIMEOUT')), 45_000)
+            ),
+          ]);
 
-        const parsed = JSON.parse(raw);
-        return this.normalizeResult(parsed);
-      } catch (err: any) {
-        const is429 = err?.status === 429 || /429|RESOURCE_EXHAUSTED/i.test(err?.message ?? '');
-        if (is429 && attempt < 3) {
-          const waitMs = Math.pow(2, attempt + 1) * 4000;
-          logger.warn({ attempt, waitMs }, 'Gemini 429 — retrying form analysis');
-          await new Promise((r) => setTimeout(r, waitMs));
-          continue;
+          const raw = result.response
+            .text()
+            .replace(/^```(?:json)?\n?/i, '')
+            .replace(/\n?```$/m, '')
+            .trim();
+
+          const parsed = JSON.parse(raw);
+          return this.normalizeResult(parsed);
+        } catch (err: any) {
+          const is429 = err?.status === 429 || /429|RESOURCE_EXHAUSTED/i.test(err?.message ?? '');
+
+          if (is429) {
+            // Use the retry delay suggested by the API if available
+            const retryDelaySec = this.parseRetryDelay(err);
+            const waitMs = retryDelaySec
+              ? retryDelaySec * 1000 + 500
+              : Math.pow(2, attempt + 1) * 4000;
+
+            if (attempt < 3) {
+              logger.warn({ attempt, modelName, waitMs }, 'Gemini 429 — retrying form analysis');
+              await new Promise((r) => setTimeout(r, waitMs));
+              continue;
+            }
+            // Quota exhausted on this model — try the next one
+            logger.warn({ modelName }, 'Gemini quota exhausted — trying fallback model');
+            break;
+          }
+
+          throw err;
         }
-        throw err;
       }
     }
-    throw new AppError('Gemini call exhausted retries', 502, 'AI_FAILED');
+
+    throw new AppError(
+      'Gemini API quota exhausted. Generate a new API key at aistudio.google.com/app/apikey and update GEMINI_API_KEY in .env',
+      502,
+      'AI_QUOTA_EXHAUSTED'
+    );
+  }
+
+  private parseRetryDelay(err: any): number | null {
+    try {
+      const details: any[] = err?.errorDetails ?? [];
+      for (const d of details) {
+        if (d['@type']?.includes('RetryInfo') && d.retryDelay) {
+          return parseInt(d.retryDelay.replace('s', ''), 10);
+        }
+      }
+    } catch { /* ignore */ }
+    return null;
   }
 
   private normalizeResult(parsed: any): FormAnalysisResult {

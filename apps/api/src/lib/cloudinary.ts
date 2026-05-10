@@ -16,21 +16,27 @@ cloudinary.config({
  * @param buffer  Raw file bytes
  * @param folder  Cloudinary folder path (e.g. "graphite/avatars")
  * @param publicId  Optional stable public_id so re-uploads overwrite in-place
+ * @param resourceType  'image' (default) or 'raw' for PDFs/documents
  */
 export async function uploadToCloudinary(
   buffer: Buffer,
   folder: string,
-  publicId?: string
+  publicId?: string,
+  resourceType: 'image' | 'raw' | 'auto' = 'image'
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const options: Record<string, any> = {
       folder,
-      resource_type: 'image',
-      transformation: [
+      resource_type: resourceType,
+    };
+
+    // Only apply image transformations for image uploads
+    if (resourceType === 'image') {
+      options.transformation = [
         { width: 400, height: 400, crop: 'fill', gravity: 'face' },
         { quality: 'auto', fetch_format: 'auto' },
-      ],
-    };
+      ];
+    }
 
     if (publicId) {
       options.public_id = publicId;

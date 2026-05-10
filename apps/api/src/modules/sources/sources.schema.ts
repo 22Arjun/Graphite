@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const linkedInSchema = z.object({
+  profileUrl: z.string().url('Must be a valid LinkedIn URL').optional(),
   headline: z.string().max(200).optional(),
   currentRole: z.string().max(100).optional(),
   company: z.string().max(100).optional(),

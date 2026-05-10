@@ -389,6 +389,7 @@ model IngestionJob {
 model LinkedInData {
   id              String          @id @default(uuid()) @db.Uuid
   builderId       String          @unique @map("builder_id") @db.Uuid
+  profileUrl      String?         @map("profile_url")
   headline        String?
   currentRole     String?         @map("current_role")
   company         String?
@@ -446,6 +447,7 @@ model HackathonEntry {
 model ResumeData {
   id              String          @id @default(uuid()) @db.Uuid
   builderId       String          @unique @map("builder_id") @db.Uuid
+  resumeUrl       String?         @map("resume_url")         /// Cloudinary secure_url of the uploaded PDF
   parsedSkills    String[]        @default([]) @map("parsed_skills")
   parsedTechStack String[]        @default([]) @map("parsed_tech_stack")
   yearsExperience Int             @default(0) @map("years_experience")

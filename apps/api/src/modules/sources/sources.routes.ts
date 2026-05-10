@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fastifyMultipart from '@fastify/multipart';
+import { uploadToCloudinary } from '../../lib/cloudinary.js';
 // Lazy-loaded to avoid DOMMatrix crash in serverless environments at import time
 let _pdfParse: ((buffer: Buffer) => Promise<{ text: string }>) | null = null;
 async function pdfParse(buffer: Buffer): Promise<{ text: string }> {
@@ -49,6 +50,7 @@ export default async function sourcesRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const user = request.user as JwtPayload;
       const body = linkedInSchema.parse(request.body);
+      // Persist profileUrl alongside other fields
       const result = await service.upsertLinkedIn(user.sub, body);
       return reply.status(200).send({ success: true, data: result });
     }
@@ -176,6 +178,10 @@ export default async function sourcesRoutes(fastify: FastifyInstance) {
       const buffer = await data.toBuffer();
       if (buffer.length === 0) throw new AppError('Empty file uploaded', 400, 'EMPTY_FILE');
 
+      // 1. Upload PDF to Cloudinary and get a permanent public URL
+      const resumeUrl = await uploadToCloudinary(buffer, 'graphite/resumes', `resume-${user.sub}`, 'raw');
+
+      // 2. Parse text for AI analysis
       let pdfText: string;
       try {
         const parsed = await pdfParse(buffer);
@@ -188,7 +194,8 @@ export default async function sourcesRoutes(fastify: FastifyInstance) {
         throw new AppError('PDF contains too little text to parse', 422, 'INSUFFICIENT_TEXT');
       }
 
-      await service.parseAndSaveResume(user.sub, pdfText);
+      // 3. Parse via AI and save (including the Cloudinary URL)
+      await service.parseAndSaveResume(user.sub, pdfText, resumeUrl);
       const result = await service.getResume(user.sub);
       return reply.status(200).send({ success: true, data: result });
     }

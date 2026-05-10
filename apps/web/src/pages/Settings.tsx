@@ -22,6 +22,7 @@ import {
   Upload,
   X,
   Edit2,
+  ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api, profileApi, sourcesApi, ingestionApi } from '@/lib/api';
@@ -102,7 +103,7 @@ function SourceCard({
 }
 
 // -------------------------------------------------------
-// LinkedIn Panel
+// LinkedIn Panel — profile URL only
 // -------------------------------------------------------
 function LinkedInPanel({ onSaved }: { onSaved: () => void }) {
   const { toast } = useToast();
@@ -112,40 +113,21 @@ function LinkedInPanel({ onSaved }: { onSaved: () => void }) {
     queryFn: async () => { const r: any = await sourcesApi.getLinkedIn(); return r.data; },
   });
 
-  const [headline, setHeadline] = useState('');
-  const [currentRole, setCurrentRole] = useState('');
-  const [company, setCompany] = useState('');
-  const [yearsExperience, setYearsExperience] = useState('0');
-  const [educationLevel, setEducationLevel] = useState('');
-  const [skillsInput, setSkillsInput] = useState('');
+  const [profileUrl, setProfileUrl] = useState('');
 
   useEffect(() => {
-    if (existing) {
-      setHeadline(existing.headline ?? '');
-      setCurrentRole(existing.currentRole ?? '');
-      setCompany(existing.company ?? '');
-      setYearsExperience(String(existing.yearsExperience ?? 0));
-      setEducationLevel(existing.educationLevel ?? '');
-      setSkillsInput((existing.skills ?? []).join(', '));
-    }
+    if (existing?.profileUrl) setProfileUrl(existing.profileUrl);
   }, [existing]);
 
   const save = useMutation({
-    mutationFn: () => sourcesApi.saveLinkedIn({
-      headline: headline || undefined,
-      currentRole: currentRole || undefined,
-      company: company || undefined,
-      yearsExperience: parseInt(yearsExperience) || 0,
-      educationLevel: educationLevel || undefined,
-      skills: skillsInput ? skillsInput.split(',').map((s) => s.trim()).filter(Boolean) : [],
-    }),
+    mutationFn: () => sourcesApi.saveLinkedIn({ profileUrl: profileUrl || undefined }),
     onSuccess: () => {
-      toast({ title: 'LinkedIn data saved' });
+      toast({ title: 'LinkedIn profile saved' });
       queryClient.invalidateQueries({ queryKey: ['sources'] });
       queryClient.invalidateQueries({ queryKey: ['builderProfile'] });
       onSaved();
     },
-    onError: () => toast({ title: 'Failed to save LinkedIn data', variant: 'destructive' }),
+    onError: () => toast({ title: 'Failed to save LinkedIn profile', variant: 'destructive' }),
   });
 
   const remove = useMutation({
@@ -154,6 +136,7 @@ function LinkedInPanel({ onSaved }: { onSaved: () => void }) {
       toast({ title: 'LinkedIn data removed' });
       queryClient.invalidateQueries({ queryKey: ['sources'] });
       queryClient.invalidateQueries({ queryKey: ['builderProfile'] });
+      setProfileUrl('');
       onSaved();
     },
   });
@@ -162,42 +145,38 @@ function LinkedInPanel({ onSaved }: { onSaved: () => void }) {
 
   return (
     <div className="space-y-3 mt-3">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Headline</label>
-          <input className={inputClass} placeholder="Senior Engineer @ Acme" value={headline} onChange={(e) => setHeadline(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Current Role</label>
-          <input className={inputClass} placeholder="Software Engineer" value={currentRole} onChange={(e) => setCurrentRole(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Company</label>
-          <input className={inputClass} placeholder="Company name" value={company} onChange={(e) => setCompany(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Years of Experience</label>
-          <input className={inputClass} type="number" min="0" max="60" value={yearsExperience} onChange={(e) => setYearsExperience(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Education Level</label>
-          <select className={inputClass} value={educationLevel} onChange={(e) => setEducationLevel(e.target.value)}>
-            <option value="">Select...</option>
-            {['HIGH_SCHOOL','ASSOCIATE','BACHELOR','MASTER','PHD','BOOTCAMP','SELF_TAUGHT','OTHER'].map((v) => (
-              <option key={v} value={v}>{v.replace(/_/g, ' ')}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Skills (comma-separated)</label>
-          <input className={inputClass} placeholder="React, TypeScript, Solidity" value={skillsInput} onChange={(e) => setSkillsInput(e.target.value)} />
-        </div>
+      {/* Profile URL input */}
+      <div>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">LinkedIn Profile URL</label>
+        <input
+          className={inputClass}
+          placeholder="https://linkedin.com/in/your-handle"
+          value={profileUrl}
+          onChange={(e) => setProfileUrl(e.target.value)}
+          type="url"
+        />
+        <p className="text-[10px] text-muted-foreground/50 mt-1">Paste your full LinkedIn profile URL.</p>
       </div>
-      <div className="flex items-center gap-2 pt-1">
-        <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || !profileUrl.trim()}>
           {save.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
-          Save LinkedIn
+          Save
         </Button>
+
+        {/* Visit Profile button */}
+        {existing?.profileUrl && (
+          <a
+            href={existing.profileUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/5 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-500/15 hover:border-blue-500/50 transition-colors"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Visit Profile
+          </a>
+        )}
+
         {existing && (
           <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10" onClick={() => remove.mutate()} disabled={remove.isPending}>
             <Trash2 className="h-3.5 w-3.5 mr-1.5" />
@@ -421,7 +400,7 @@ function HackathonPanel({ onSaved }: { onSaved: () => void }) {
 }
 
 // -------------------------------------------------------
-// Resume Panel
+// Resume Panel — upload to Cloudinary, AI-parse, show link
 // -------------------------------------------------------
 function ResumePanel({ onSaved }: { onSaved: () => void }) {
   const { toast } = useToast();
@@ -437,7 +416,7 @@ function ResumePanel({ onSaved }: { onSaved: () => void }) {
   const upload = useMutation({
     mutationFn: (file: File) => sourcesApi.uploadResume(file),
     onSuccess: () => {
-      toast({ title: 'Resume parsed and saved', description: 'Skills and experience extracted successfully.' });
+      toast({ title: 'Resume uploaded & parsed', description: 'Skills and experience extracted successfully. A permanent link has been saved.' });
       queryClient.invalidateQueries({ queryKey: ['sources'] });
       queryClient.invalidateQueries({ queryKey: ['builderProfile'] });
       onSaved();
@@ -468,6 +447,7 @@ function ResumePanel({ onSaved }: { onSaved: () => void }) {
 
   return (
     <div className="space-y-3 mt-3">
+      {/* Existing resume info */}
       {existing && (
         <div className="rounded-lg bg-purple-500/5 border border-purple-500/20 px-4 py-3 text-xs text-muted-foreground space-y-1">
           {existing.currentRole && <p className="font-medium text-foreground">{existing.currentRole}</p>}
@@ -475,9 +455,22 @@ function ResumePanel({ onSaved }: { onSaved: () => void }) {
           {existing.parsedSkills?.length > 0 && (
             <p className="truncate">{existing.parsedSkills.slice(0, 8).join(', ')}{existing.parsedSkills.length > 8 ? '...' : ''}</p>
           )}
+          {/* View Resume link — Cloudinary public URL */}
+          {existing.resumeUrl && (
+            <a
+              href={existing.resumeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 mt-1 rounded-md border border-purple-500/30 bg-purple-500/5 px-2.5 py-1 text-[11px] font-medium text-purple-400 hover:bg-purple-500/15 hover:border-purple-500/50 transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+              View Resume
+            </a>
+          )}
         </div>
       )}
 
+      {/* Drop zone */}
       <div
         className={`relative border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer ${dragging ? 'border-primary/60 bg-primary/5' : 'border-border/50 hover:border-primary/40 hover:bg-surface-2'}`}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -489,13 +482,13 @@ function ResumePanel({ onSaved }: { onSaved: () => void }) {
         {upload.isPending ? (
           <div className="flex flex-col items-center gap-2">
             <Loader2 className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-xs text-muted-foreground">Parsing resume with AI...</p>
+            <p className="text-xs text-muted-foreground">Uploading &amp; parsing resume with AI...</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2">
             <Upload className="h-8 w-8 text-muted-foreground/50" />
-            <p className="text-xs text-muted-foreground">Drop a PDF here or click to browse</p>
-            <p className="text-[10px] text-muted-foreground/50">Max 10 MB · PDF only</p>
+            <p className="text-xs text-muted-foreground">{existing ? 'Drop a new PDF to replace' : 'Drop a PDF here or click to browse'}</p>
+            <p className="text-[10px] text-muted-foreground/50">Max 10 MB · PDF only · Stored securely on Cloudinary</p>
           </div>
         )}
       </div>

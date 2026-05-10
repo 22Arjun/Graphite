@@ -192,13 +192,14 @@ export class SourcesService {
   // Resume
   // -------------------------------------------------------
 
-  async parseAndSaveResume(builderId: string, pdfText: string): Promise<void> {
+  async parseAndSaveResume(builderId: string, pdfText: string, resumeUrl?: string): Promise<void> {
     const parsed = await this.parseResumeWithGemini(pdfText);
 
     await this.prisma.resumeData.upsert({
       where: { builderId },
       create: {
         builderId,
+        resumeUrl: resumeUrl ?? null,
         parsedSkills: parsed.skills,
         parsedTechStack: parsed.techStack,
         yearsExperience: parsed.yearsExperience,
@@ -209,6 +210,7 @@ export class SourcesService {
         parsedAt: new Date(),
       },
       update: {
+        resumeUrl: resumeUrl ?? undefined,
         parsedSkills: parsed.skills,
         parsedTechStack: parsed.techStack,
         yearsExperience: parsed.yearsExperience,

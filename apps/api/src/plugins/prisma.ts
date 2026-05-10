@@ -14,14 +14,7 @@ declare module 'fastify' {
 }
 
 async function prismaPlugin(fastify: FastifyInstance) {
-  // Cap the connection pool for Supabase free tier (max 15 connections via pgBouncer).
-  // Without this Prisma opens 10+ connections and starves out transactions mid-ingestion.
-  const dbUrl = new URL(env.DATABASE_URL);
-  if (!dbUrl.searchParams.has('connection_limit')) dbUrl.searchParams.set('connection_limit', '5');
-  if (!dbUrl.searchParams.has('pool_timeout')) dbUrl.searchParams.set('pool_timeout', '15');
-
   const prisma = new PrismaClient({
-    datasourceUrl: dbUrl.toString(),
     log:
       env.NODE_ENV === 'development'
         ? [

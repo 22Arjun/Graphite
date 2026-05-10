@@ -49,23 +49,30 @@ export class IngestionService {
     const startTime = Date.now();
     logger.info({ builderId, username }, 'GitHub reputation sync started');
 
-    // Step 1: Fetch repo list and pinned names in parallel
-    const [allRepos, pinnedNames] = await Promise.all([
+    // Step 1: Fetch repo list and GraphQL data (pinned names + real commit counts) in parallel.
+    // The GraphQL call gives us the true total commit count per repo — not available from the REST list API.
+    const [allRepos, { pinnedNames, commitCounts }] = await Promise.all([
       this.github.fetchUserRepos(accessToken, username),
-      this.github.fetchPinnedRepos(accessToken, username),
+      this.github.fetchGitHubGraphQLData(accessToken, username),
     ]);
 
     const filtered = allRepos.filter((r) => !r.archived && !r.fork);
     const selected = this.github.selectHighSignalRepos(filtered, pinnedNames, 5);
 
-    logger.info({ builderId, total: allRepos.length, selected: selected.length }, 'Repos selected');
+    logger.info({ builderId, total: allRepos.length, filtered: filtered.length, selected: selected.length }, 'Repos selected');
 
-    // Step 2: Ingest all selected repos in parallel
+    // Step 2: Bulk-upsert ALL filtered repos with real commit counts from GraphQL.
+    // This ensures totalRepos / totalStars / totalForks / commitCount stats are accurate.
+    const allNormalized = filtered.map((r) => this.github.normalizeRepo(r, r.has_pages || false));
+    await this.repo.bulkUpsertBasicRepos(builderId, allNormalized, commitCounts);
+
+    // Step 3: Full ingestion (commits + languages + contributors) for top 5 only.
+    // These are the repos used for AI analysis and detailed scoring.
     const ingestionResults = await Promise.allSettled(
       selected.map((r) => this.github.ingestLightweightRepository(accessToken, r, username))
     );
 
-    // Step 3: Persist to DB
+    // Step 4: Persist detailed data to DB
     const repoIds: string[] = [];
     for (let i = 0; i < ingestionResults.length; i++) {
       const result = ingestionResults[i];
@@ -91,7 +98,7 @@ export class IngestionService {
       return;
     }
 
-    // Step 4: Repo analysis — structured JSON scores only (no builder summary)
+    // Step 5: Repo analysis — structured JSON scores only (no builder summary)
     // Errors are non-fatal; scoring still runs on behavioral signals
     try {
       await this.analysis.analyzeRepositoriesBatch(builderId, repoIds);
@@ -99,10 +106,10 @@ export class IngestionService {
       logger.error({ builderId, err }, 'Repo analysis failed — proceeding with available data');
     }
 
-    // Step 5: Compute reputation scores
+    // Step 6: Compute reputation scores
     await this.scoring.computeReputation(builderId);
 
-    // Step 6: Update lastSyncedAt — this is the signal the frontend polls on
+    // Step 7: Update lastSyncedAt — this is the signal the frontend polls on
     await this.prisma.gitHubProfile.update({
       where: { builderId },
       data: { lastSyncedAt: new Date() },

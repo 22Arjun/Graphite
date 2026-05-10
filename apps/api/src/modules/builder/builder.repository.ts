@@ -221,39 +221,54 @@ export class BuilderRepository {
    * Get aggregated GitHub stats for a builder.
    */
   async getGitHubStats(builderId: string) {
-    const [repoStats, languageStats, commitCount] = await Promise.all([
+    const [repoStats, primaryLangStats] = await Promise.all([
+      // Aggregate stars, forks, real commit counts across ALL repos
       this.prisma.repository.aggregate({
         where: { builderId },
-        _sum: { stars: true, forks: true },
+        _sum: { stars: true, forks: true, commitCount: true },
         _count: true,
       }),
-      this.prisma.repositoryLanguage.groupBy({
-        by: ['language', 'color'],
-        where: { repository: { builderId } },
-        _sum: { bytes: true },
-        orderBy: { _sum: { bytes: 'desc' } },
+      // Language distribution from primaryLanguage across ALL repos (not just the 5 analyzed)
+      this.prisma.repository.groupBy({
+        by: ['primaryLanguage'],
+        where: { builderId, primaryLanguage: { not: null } },
+        _count: { primaryLanguage: true },
+        orderBy: { _count: { primaryLanguage: 'desc' } },
         take: 10,
-      }),
-      this.prisma.commit.count({
-        where: { repository: { builderId } },
       }),
     ]);
 
-    const totalLangBytes = languageStats.reduce((sum, l) => sum + (l._sum.bytes || 0), 0);
+    const totalRepoCount = repoStats._count;
+    // commitCount on each repo is set from the GraphQL totalCount — real numbers
+    const totalCommits = repoStats._sum.commitCount || 0;
+
+    // Convert repo-count-per-language into percentages
+    const totalWithLang = primaryLangStats.reduce((s, l) => s + (l._count.primaryLanguage || 0), 0);
+
+    const LANG_COLORS: Record<string, string> = {
+      TypeScript: '#3178c6', JavaScript: '#f1e05a', Python: '#3572A5',
+      Rust: '#dea584', Go: '#00ADD8', Java: '#b07219', 'C++': '#f34b7d',
+      C: '#555555', Ruby: '#701516', Swift: '#F05138', Kotlin: '#A97BFF',
+      Dart: '#00B4AB', PHP: '#4F5D95', Scala: '#c22d40', Shell: '#89e051',
+      HTML: '#e34c26', CSS: '#563d7c', Vue: '#41b883', Svelte: '#ff3e00',
+      Solidity: '#AA6746',
+    };
 
     return {
-      totalRepos: repoStats._count,
+      totalRepos: totalRepoCount,
       totalStars: repoStats._sum.stars || 0,
       totalForks: repoStats._sum.forks || 0,
-      totalCommits: commitCount,
-      topLanguages: languageStats.map((l) => ({
-        language: l.language,
-        bytes: l._sum.bytes || 0,
-        percentage: totalLangBytes > 0
-          ? Math.round(((l._sum.bytes || 0) / totalLangBytes) * 10000) / 100
-          : 0,
-        color: l.color,
-      })),
+      totalCommits,
+      topLanguages: primaryLangStats
+        .filter((l) => l.primaryLanguage)
+        .map((l) => ({
+          language: l.primaryLanguage as string,
+          bytes: l._count.primaryLanguage || 0,
+          percentage: totalWithLang > 0
+            ? Math.round(((l._count.primaryLanguage || 0) / totalWithLang) * 10000) / 100
+            : 0,
+          color: LANG_COLORS[l.primaryLanguage as string] ?? '#8b8b8b',
+        })),
     };
   }
 }

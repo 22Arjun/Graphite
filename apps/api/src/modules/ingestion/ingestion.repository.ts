@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import type { RepoIngestionData } from '../github/github.types.js';
+import type { RepoIngestionData, NormalizedRepo } from '../github/github.types.js';
 import { logger } from '../../lib/logger.js';
 
 // ============================================================
@@ -194,5 +194,76 @@ export class IngestionRepository {
       select: { githubId: true },
     });
     return new Set(repos.map((r) => r.githubId));
+  }
+
+  /**
+   * Bulk-upsert repo metadata for ALL repos from the GitHub list API.
+   * No commits, languages, or contributors — just the fields available on the list response.
+   * This ensures totalRepos / totalStars / totalForks stats are accurate across all repos.
+   * Full ingestion (commits + languages + contributors) is done separately for the top-N repos.
+   */
+  /**
+   * @param commitCounts  Map<fullName, totalCommitCount> from GitHub GraphQL.
+   *                      If a repo is missing from the map, commitCount is left at 0.
+   */
+  async bulkUpsertBasicRepos(
+    builderId: string,
+    repos: NormalizedRepo[],
+    commitCounts: Map<string, number> = new Map()
+  ): Promise<void> {
+    if (repos.length === 0) return;
+
+    await Promise.all(
+      repos.map((repo) => {
+        const realCommitCount = commitCounts.get(repo.fullName) ?? 0;
+        return this.prisma.repository.upsert({
+          where: { githubId: repo.githubId },
+          create: {
+            builderId,
+            githubId: repo.githubId,
+            name: repo.name,
+            fullName: repo.fullName,
+            description: repo.description,
+            url: repo.url,
+            homepage: repo.homepage,
+            isPrivate: repo.isPrivate,
+            isFork: repo.isFork,
+            isArchived: repo.isArchived,
+            stars: repo.stars,
+            forks: repo.forks,
+            watchers: repo.watchers,
+            openIssues: repo.openIssues,
+            size: repo.size,
+            defaultBranch: repo.defaultBranch,
+            primaryLanguage: repo.primaryLanguage,
+            topics: repo.topics,
+            licenseName: repo.licenseName,
+            hasDeployment: repo.hasDeployment,
+            commitCount: realCommitCount,
+            pushedAt: repo.pushedAt,
+            repoCreatedAt: repo.repoCreatedAt,
+            repoUpdatedAt: repo.repoUpdatedAt,
+            analysisStatus: 'PENDING',
+          },
+          update: {
+            name: repo.name,
+            fullName: repo.fullName,
+            description: repo.description,
+            stars: repo.stars,
+            forks: repo.forks,
+            watchers: repo.watchers,
+            openIssues: repo.openIssues,
+            primaryLanguage: repo.primaryLanguage,
+            topics: repo.topics,
+            hasDeployment: repo.hasDeployment,
+            commitCount: realCommitCount,
+            pushedAt: repo.pushedAt,
+            repoUpdatedAt: repo.repoUpdatedAt,
+          },
+        });
+      })
+    );
+
+    logger.info({ builderId, count: repos.length }, 'Basic repo metadata upserted');
   }
 }

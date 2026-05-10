@@ -149,50 +149,110 @@ export class GitHubService {
   }
 
   /**
-   * Fetch pinned repository names via GitHub GraphQL API.
-   * Falls back to [] on any error — pinned data is a bonus, not required.
+   * Single GraphQL call that returns both pinned repo names AND the real total
+   * commit count for every repo the user owns.  Both are needed during ingestion;
+   * combining them saves a round-trip and keeps us well inside the 15 RPM limit.
+   *
+   * Falls back to empty values on any error — neither field is critical.
    */
-  async fetchPinnedRepos(accessToken: string, username: string): Promise<string[]> {
+  async fetchGitHubGraphQLData(
+    accessToken: string,
+    username: string
+  ): Promise<{ pinnedNames: string[]; commitCounts: Map<string, number> }> {
+    const empty = { pinnedNames: [] as string[], commitCounts: new Map<string, number>() };
+
+    // Fetch up to 100 repos per page; most users have far fewer.
+    // `affiliations: OWNER` excludes org repos the user merely collaborates on.
     const query = `
-      query($login: String!) {
+      query($login: String!, $cursor: String) {
         user(login: $login) {
           pinnedItems(first: 6, types: REPOSITORY) {
+            nodes { ... on Repository { nameWithOwner } }
+          }
+          repositories(first: 100, after: $cursor, affiliations: [OWNER], isFork: false) {
             nodes {
-              ... on Repository { nameWithOwner }
+              nameWithOwner
+              isArchived
+              defaultBranchRef {
+                target { ... on Commit { history { totalCount } } }
+              }
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
       }
     `;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
+    const commitCounts = new Map<string, number>();
+    const pinnedNames: string[] = [];
+    let cursor: string | null = null;
+    let firstPage = true;
 
     try {
-      const response = await fetch(GH_GRAPHQL_URL, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'Graphite-API/0.1',
-        },
-        body: JSON.stringify({ query, variables: { login: username } }),
-      });
+      while (true) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
 
-      if (!response.ok) return [];
+        let json: any;
+        try {
+          const res = await fetch(GH_GRAPHQL_URL, {
+            method: 'POST',
+            signal: controller.signal,
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'User-Agent': 'Graphite-API/0.1',
+            },
+            body: JSON.stringify({ query, variables: { login: username, cursor } }),
+          });
+          if (!res.ok) return empty;
+          json = await res.json() as any;
+        } finally {
+          clearTimeout(timer);
+        }
 
-      const json = await response.json() as any;
-      const nodes = json?.data?.user?.pinnedItems?.nodes ?? [];
-      return nodes
-        .filter((n: any) => n?.nameWithOwner)
-        .map((n: any) => n.nameWithOwner as string);
-    } catch {
-      logger.warn({ username }, 'Pinned repos fetch failed, continuing without');
-      return [];
-    } finally {
-      clearTimeout(timer);
+        if (json?.errors) {
+          logger.warn({ username, errors: json.errors }, 'GraphQL returned errors');
+          break;
+        }
+
+        const user = json?.data?.user;
+        if (!user) break;
+
+        // Pinned repos — only on first page
+        if (firstPage) {
+          const nodes = user?.pinnedItems?.nodes ?? [];
+          for (const n of nodes) {
+            if (n?.nameWithOwner) pinnedNames.push(n.nameWithOwner as string);
+          }
+          firstPage = false;
+        }
+
+        // Commit counts
+        const repoNodes: any[] = user?.repositories?.nodes ?? [];
+        for (const n of repoNodes) {
+          if (!n?.nameWithOwner || n.isArchived) continue;
+          const count = n?.defaultBranchRef?.target?.history?.totalCount ?? 0;
+          commitCounts.set(n.nameWithOwner as string, count as number);
+        }
+
+        const pageInfo = user?.repositories?.pageInfo;
+        if (!pageInfo?.hasNextPage) break;
+        cursor = pageInfo.endCursor;
+      }
+    } catch (err) {
+      logger.warn({ username, err }, 'GraphQL fetch failed, continuing without commit counts');
+      return empty;
     }
+
+    logger.info({ username, pinned: pinnedNames.length, repos: commitCounts.size }, 'GraphQL data fetched');
+    return { pinnedNames, commitCounts };
+  }
+
+  /** @deprecated Use fetchGitHubGraphQLData instead */
+  async fetchPinnedRepos(accessToken: string, username: string): Promise<string[]> {
+    const { pinnedNames } = await this.fetchGitHubGraphQLData(accessToken, username);
+    return pinnedNames;
   }
 
   /**

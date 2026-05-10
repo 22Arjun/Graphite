@@ -1,6 +1,6 @@
 // ============================================================
 // Graphite — Database Schema
-// Supabase PostgreSQL via Prisma ORM
+// Local PostgreSQL via Prisma ORM
 // ============================================================
 
 generator client {
@@ -8,9 +8,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // -------------------------------------------------------

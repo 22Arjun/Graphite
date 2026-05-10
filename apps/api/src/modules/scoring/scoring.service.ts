@@ -25,9 +25,9 @@ export class ScoringService {
         repositories: {
           include: {
             analysis: true,
-            languages: true,
-            commits: { orderBy: { committedAt: 'desc' }, take: 100 },
-            contributors: true,
+            languages: { select: { language: true, percentage: true } },
+            commits: { orderBy: { committedAt: 'desc' }, take: 100, select: { committedAt: true } },
+            contributors: { select: { githubLogin: true, contributions: true, isOwner: true } },
           },
         },
         linkedInData: true,
@@ -147,31 +147,42 @@ export class ScoringService {
 
   private computeTechnicalDepth(repos: RepoWithAnalysis[]): DimensionScore {
     const analyses = repos.map((r) => r.analysis).filter(Boolean);
-    if (analyses.length === 0) return this.zeroScore('TECHNICAL_DEPTH');
 
-    const avgComplexity = avg(analyses.map((a) => a!.architectureComplexity));
-    const avgQuality = avg(analyses.map((a) => a!.codeQualitySignals));
+    // Language diversity — available from all repos regardless of AI analysis
+    const allLanguages = new Set([
+      ...repos.flatMap((r) => r.languages.map((l) => l.language)),
+      ...repos.map((r) => r.primaryLanguage).filter(Boolean) as string[],
+    ]);
+    const langDiversityScore = Math.min(25, allLanguages.size * 3);
 
-    // Language diversity bonus (polyglot builders score higher)
-    const allLanguages = new Set(repos.flatMap((r) => r.languages.map((l) => l.language)));
-    const langDiversityBonus = Math.min(10, allLanguages.size * 1.5);
+    // Repo volume signal
+    const repoVolumeScore = Math.min(20, repos.length * 1.5);
 
-    const raw = avgComplexity * 4 + avgQuality * 4 + langDiversityBonus * 2;
-    const score = Math.min(100, Math.round(raw));
+    // AI boost — only if analysis records exist
+    let aiScore = 0;
+    if (analyses.length > 0) {
+      const avgComplexity = avg(analyses.map((a) => a!.architectureComplexity));
+      const avgQuality = avg(analyses.map((a) => a!.codeQualitySignals));
+      aiScore = avgComplexity * 3 + avgQuality * 3;
+    }
+
+    const score = Math.min(100, Math.round(langDiversityScore + repoVolumeScore + aiScore));
 
     const signals: string[] = [
-      `${analyses.length} repositories analyzed`,
-      `Average architecture complexity: ${avgComplexity.toFixed(1)}/10`,
+      `${repos.length} repositories in profile`,
       `${allLanguages.size} programming languages used`,
     ];
+    if (analyses.length > 0) {
+      signals.push(`${analyses.length} repos AI-analyzed`);
+    }
 
-    const highComplexityCount = analyses.filter((a) => a!.architectureComplexity >= 7).length;
-    if (highComplexityCount > 0) signals.push(`${highComplexityCount} high-complexity projects`);
-
+    // Confidence: repos give a behavioral baseline; AI analysis adds certainty
+    const baseConfidence = Math.min(0.6, repos.length / 10);
+    const aiConfidence = Math.min(0.4, analyses.length / 5);
     return {
       dimension: 'TECHNICAL_DEPTH',
       score,
-      confidence: Math.min(1, analyses.length / 5),
+      confidence: Math.min(1, baseConfidence + aiConfidence),
       signals,
       trend: 'STABLE',
     };
@@ -179,31 +190,40 @@ export class ScoringService {
 
   private computeExecutionAbility(repos: RepoWithAnalysis[]): DimensionScore {
     const analyses = repos.map((r) => r.analysis).filter(Boolean);
-    if (analyses.length === 0) return this.zeroScore('EXECUTION_ABILITY');
 
-    const deployedCount = repos.filter((r) => r.hasDeployment || r.analysis?.deploymentDetected).length;
-    const avgMaturity = avg(analyses.map((a) => a!.executionMaturity));
+    // Behavioral signals — available without AI
+    const deployedCount = repos.filter(
+      (r) => r.hasDeployment || r.analysis?.deploymentDetected
+    ).length;
     const totalStars = repos.reduce((s, r) => s + r.stars, 0);
     const totalForks = repos.reduce((s, r) => s + r.forks, 0);
 
     const deploymentScore = Math.min(30, deployedCount * 6);
-    const maturityScore = avgMaturity * 4;
+    const repoCountScore = Math.min(20, repos.length * 1.5);
     const socialProof = Math.min(20, Math.log10(totalStars + totalForks + 1) * 8);
 
-    const score = Math.min(100, Math.round(deploymentScore + maturityScore + socialProof));
+    // AI boost
+    let aiScore = 0;
+    if (analyses.length > 0) {
+      const avgMaturity = avg(analyses.map((a) => a!.executionMaturity));
+      aiScore = avgMaturity * 3;
+    }
+
+    const score = Math.min(100, Math.round(deploymentScore + repoCountScore + socialProof + aiScore));
 
     const signals: string[] = [
-      `${deployedCount} deployed projects`,
       `${repos.length} repositories maintained`,
+      `${deployedCount} deployed projects`,
       `${totalStars} total stars earned`,
     ];
+    if (analyses.length > 0) signals.push(`AI maturity avg: ${avg(analyses.map(a => a!.executionMaturity)).toFixed(1)}/10`);
 
-    if (avgMaturity >= 7) signals.push('High execution maturity across projects');
-
+    const baseConfidence = Math.min(0.6, repos.length / 8);
+    const aiConfidence = Math.min(0.4, analyses.length / 5);
     return {
       dimension: 'EXECUTION_ABILITY',
       score,
-      confidence: Math.min(1, repos.length / 5),
+      confidence: Math.min(1, baseConfidence + aiConfidence),
       signals,
       trend: 'STABLE',
     };
@@ -265,22 +285,28 @@ export class ScoringService {
     const collaboratorScore = Math.min(40, uniqueCollaborators.size * 4);
     const teamworkScore = Math.min(30, reposWithCollaborators * 5);
     const contributionScore = Math.min(30, Math.log10(totalContributions + 1) * 12);
+    // Public portfolio signal — having repos others can see and fork is a collaboration signal
+    const publicPortfolioScore = Math.min(10, repos.length * 0.5);
 
-    const score = Math.min(100, Math.round(collaboratorScore + teamworkScore + contributionScore));
+    const score = Math.min(100, Math.round(collaboratorScore + teamworkScore + contributionScore + publicPortfolioScore));
 
     const signals: string[] = [
       `${uniqueCollaborators.size} unique collaborators`,
       `${reposWithCollaborators} collaborative projects`,
+      `${repos.length} public repositories`,
     ];
-
     if (totalContributions > 0) {
       signals.push(`${totalContributions} external contributions received`);
     }
 
+    // Confidence: even solo devs get a baseline from having a public profile
+    // External collaborators increase confidence further
+    const baseConfidence = Math.min(0.4, repos.length / 15);
+    const collabConfidence = Math.min(0.6, uniqueCollaborators.size / 5);
     return {
       dimension: 'COLLABORATION_QUALITY',
       score,
-      confidence: Math.min(1, uniqueCollaborators.size / 5),
+      confidence: Math.min(1, baseConfidence + collabConfidence),
       signals,
       trend: 'STABLE',
     };
@@ -288,33 +314,43 @@ export class ScoringService {
 
   private computeInnovation(repos: RepoWithAnalysis[]): DimensionScore {
     const analyses = repos.map((r) => r.analysis).filter(Boolean);
-    if (analyses.length === 0) return this.zeroScore('INNOVATION');
 
-    const avgOriginality = avg(analyses.map((a) => a!.originalityScore));
-
-    // Topic diversity
+    // Topic diversity — available from all repos regardless of AI analysis
     const allTopics = new Set(repos.flatMap((r) => r.topics));
-    const topicDiversity = Math.min(20, allTopics.size * 2);
+    const topicDiversityScore = Math.min(25, allTopics.size * 2);
 
-    // Domain diversity from AI analysis
-    const allDomains = new Set(analyses.flatMap((a) => a!.probableDomains));
-    const domainDiversity = Math.min(20, allDomains.size * 4);
+    // Variety of languages signals breadth of exploration
+    const allLanguages = new Set([
+      ...repos.flatMap((r) => r.languages.map((l) => l.language)),
+      ...repos.map((r) => r.primaryLanguage).filter(Boolean) as string[],
+    ]);
+    const langVarietyScore = Math.min(20, allLanguages.size * 2);
 
-    const score = Math.min(
-      100,
-      Math.round(avgOriginality * 6 + topicDiversity + domainDiversity)
-    );
+    // AI boost
+    let aiScore = 0;
+    if (analyses.length > 0) {
+      const avgOriginality = avg(analyses.map((a) => a!.originalityScore));
+      const allDomains = new Set(analyses.flatMap((a) => a!.probableDomains));
+      aiScore = avgOriginality * 4 + Math.min(15, allDomains.size * 3);
+    }
+
+    const score = Math.min(100, Math.round(topicDiversityScore + langVarietyScore + aiScore));
 
     const signals: string[] = [
-      `Average originality: ${avgOriginality.toFixed(1)}/10`,
       `${allTopics.size} unique topic tags`,
-      `${allDomains.size} distinct domains explored`,
+      `${allLanguages.size} languages explored`,
     ];
+    if (analyses.length > 0) {
+      const avgOriginality = avg(analyses.map((a) => a!.originalityScore));
+      signals.push(`AI originality avg: ${avgOriginality.toFixed(1)}/10`);
+    }
 
+    const baseConfidence = Math.min(0.5, repos.length / 10);
+    const aiConfidence = Math.min(0.5, analyses.length / 5);
     return {
       dimension: 'INNOVATION',
       score,
-      confidence: Math.min(1, analyses.length / 5),
+      confidence: Math.min(1, baseConfidence + aiConfidence),
       signals,
       trend: 'STABLE',
     };
@@ -525,6 +561,7 @@ type RepoWithAnalysis = {
   forks: number;
   hasDeployment: boolean;
   topics: string[];
+  primaryLanguage: string | null;
   languages: { language: string; percentage: number }[];
   commits: { committedAt: Date }[];
   contributors: { githubLogin: string; contributions: number; isOwner: boolean }[];

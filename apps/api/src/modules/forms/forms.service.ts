@@ -1,7 +1,14 @@
 import { nanoid } from 'nanoid';
 import type { PrismaClient } from '@prisma/client';
-import * as pdfParseModule from 'pdf-parse';
-const pdfParse: (buffer: Buffer) => Promise<{ text: string }> = (pdfParseModule as any).default ?? pdfParseModule;
+// Lazy-loaded to avoid DOMMatrix crash in serverless environments at import time
+let _pdfParse: ((buffer: Buffer) => Promise<{ text: string }>) | null = null;
+async function pdfParse(buffer: Buffer): Promise<{ text: string }> {
+  if (!_pdfParse) {
+    const m = await import('pdf-parse');
+    _pdfParse = (m as any).default ?? m;
+  }
+  return _pdfParse!(buffer);
+}
 import { FormAnalysisService } from './forms.analysis.service.js';
 import { CloudinaryService } from './forms.cloudinary.service.js';
 import { EmailService } from './forms.email.service.js';

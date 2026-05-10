@@ -25,6 +25,9 @@
     "@fastify/swagger-ui": "^4.1.0",
     "@google/generative-ai": "^0.24.1",
     "@prisma/client": "^5.20.0",
+    "@types/node": "^22.7.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pdf-parse": "^1.1.5",
     "bs58": "^6.0.0",
     "cloudinary": "^2.10.0",
     "dotenv": "^16.4.5",
@@ -42,9 +45,6 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^22.7.0",
-    "@types/nodemailer": "^8.0.0",
-    "@types/pdf-parse": "^1.1.5",
     "tsx": "^4.19.1"
   }
 }
